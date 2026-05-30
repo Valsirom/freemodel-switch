@@ -95,7 +95,13 @@ function cardHtml (a) {
       const color = exp.days <= 3 ? 'var(--red)' : exp.days <= 7 ? 'var(--amber)' : 'var(--text)'
       metaParts.push(`<span>${exp.tail}: <b style="color:${color}">${esc(exp.dateStr)}</b> (${exp.days} дн)</span>`)
     }
-    if (a.billing && a.billing.credits) metaParts.push(`<span>кредиты: <b>${fmtCents(a.billing.credits)}</b></span>`)
+    // "Available now" on the dashboard = bonus credits + whatever is left in the
+    // current 5-hour window (limit − used). Showing only creditCents under-reports
+    // when the 5h window isn't fully spent (it just happens to match when it is).
+    const win5 = a.usage && a.usage.window5h
+    const windowRemainCents = win5 ? Math.max(0, win5.limitCents - win5.usedCents) : 0
+    const availableCents = (a.billing ? a.billing.credits : 0) + windowRemainCents
+    if (availableCents > 0) metaParts.push(`<span>кредиты: <b>${fmtCents(availableCents)}</b></span>`)
     body = `<div class="bars">${bars}</div><div class="meta">${metaParts.join('')}</div>`
   }
 
