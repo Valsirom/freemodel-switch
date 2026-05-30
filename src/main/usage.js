@@ -70,6 +70,7 @@ function normalizeUsage (d) {
 
 // Real /api/billing nests the plan under `subscription` and reports credit as
 // top-level `creditCents`. currentPeriodEnd is "YYYY-MM-DD HH:MM:SS" UTC.
+// signupExpiresAt (also "YYYY-MM-DD HH:MM:SS" UTC) is when trial/signup credits expire.
 function normalizeBilling (d) {
   d = d || {}
   const sub = d.subscription || {}
@@ -79,7 +80,8 @@ function normalizeBilling (d) {
     currentPeriodEnd: sub.currentPeriodEnd || null,
     cancelAtPeriodEnd: !!sub.cancelAtPeriodEnd,
     renewalType: sub.renewalType || null,
-    credits: Number(d.creditCents) || 0
+    credits: Number(d.creditCents) || 0,
+    signupExpiresAt: d.signupExpiresAt || null
   }
 }
 

@@ -102,6 +102,14 @@ function cardHtml (a) {
     const windowRemainCents = win5 ? Math.max(0, win5.limitCents - win5.usedCents) : 0
     const availableCents = (a.billing ? a.billing.credits : 0) + windowRemainCents
     if (availableCents > 0) metaParts.push(`<span>кредиты: <b>${fmtCents(availableCents)}</b></span>`)
+    // Trial/signup credit expiry (if present and not yet expired).
+    if (a.billing && a.billing.signupExpiresAt) {
+      const trialExp = fmtExpiry({ currentPeriodEnd: a.billing.signupExpiresAt })
+      if (trialExp) {
+        const color = trialExp.days <= 3 ? 'var(--red)' : trialExp.days <= 7 ? 'var(--amber)' : 'var(--text)'
+        metaParts.push(`<span>trial кредиты сгорают: <b style="color:${color}">${esc(trialExp.dateStr)}</b> (${trialExp.days} дн)</span>`)
+      }
+    }
     body = `<div class="bars">${bars}</div><div class="meta">${metaParts.join('')}</div>`
   }
 
