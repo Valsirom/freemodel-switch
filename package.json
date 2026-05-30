@@ -1,0 +1,59 @@
+{
+  "name": "freemodel-switch",
+  "version": "0.1.0",
+  "description": "Account switcher for freemodel.dev with usage progress bars and subscription expiry, for Claude Code.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "icon": "node scripts/make-icon.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.freemodel.switch",
+    "productName": "freemodel switch",
+    "files": [
+      "src/**/*",
+      "build/icon.*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "freemodel switch"
+    },
+    "portable": {
+      "artifactName": "freemodel-switch-${version}-portable.exe"
+    }
+  }
+}

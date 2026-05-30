@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>freemodel switch</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="theme.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">freemodel <span>switch</span></div>
+    <div class="actions">
+      <button id="btn-theme" class="btn ghost icon" title="Сменить тему">🌙</button>
+      <button id="btn-refresh" class="btn ghost" title="Обновить использование по всем аккаунтам">⟳ Обновить</button>
+      <button id="btn-add" class="btn primary">+ Добавить аккаунт</button>
+    </div>
+  </header>
+
+  <main id="cards" class="cards"></main>
+
+  <div id="empty" class="empty hidden">
+    <p>Пока нет аккаунтов.</p>
+    <p class="muted">Нажми «Добавить аккаунт» и вставь токен <code>fe_oa_…</code> из настроек Claude Code.</p>
+  </div>
+
+  <!-- Add/Edit modal -->
+  <div id="modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2 id="modal-title">Добавить аккаунт</h2>
+      <label>Название
+        <input id="f-label" type="text" placeholder="например, Личный / Рабочий" />
+      </label>
+      <label>Токен (ANTHROPIC_AUTH_TOKEN)
+        <input id="f-token" type="text" placeholder="fe_oa_…" spellcheck="false" autocomplete="off" />
+      </label>
+      <label>Base URL
+        <input id="f-baseurl" type="text" value="https://cc.freemodel.dev" spellcheck="false" />
+      </label>
+      <p id="modal-hint" class="muted">Прогрессбары и дата подписки появятся после входа в дашборд (кнопка «Войти» на карточке).</p>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn ghost">Отмена</button>
+        <button id="modal-save" class="btn primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import session modal -->
+  <div id="import-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2>Импорт сессии</h2>
+      <p class="muted">Открой <code>freemodel.dev</code> в браузере (где ты залогинен) → F12 → Application → Cookies → <code>freemodel.dev</code> → скопируй значение сессионной cookie и вставь сюда.</p>
+      <label>Значение cookie
+        <input id="import-value" type="text" placeholder="вставь значение cookie" spellcheck="false" autocomplete="off" />
+      </label>
+      <p id="import-error" class="notice hidden"></p>
+      <div class="modal-actions">
+        <button id="import-cancel" class="btn ghost">Отмена</button>
+        <button id="import-save" class="btn primary">Импортировать</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="render.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
