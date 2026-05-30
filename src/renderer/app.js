@@ -110,8 +110,10 @@ cardsEl.addEventListener('click', async (e) => {
   const acct = accounts.find(a => a.id === id)
 
   if (act === 'switch') {
+    btn.textContent = '⏳'; btn.disabled = true
     await window.api.switchAndRestart(id)
-    // app will quit after spawning Claude Code, no render needed
+    await render()
+    // Claude desktop restarts in the background; this app stays open.
   } else if (act === 'login') {
     btn.textContent = 'Вход…'; btn.disabled = true
     await window.api.login(id)

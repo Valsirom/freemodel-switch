@@ -24,6 +24,9 @@ function createWindow () {
   })
   mainWindow.removeMenu()
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
+  // settings.json can be changed by other tools (e.g. CC Switch) while we're
+  // open; re-sync the active indicator whenever the window regains focus.
+  mainWindow.on('focus', () => notifyChanged())
   if (process.argv.includes('--dev')) mainWindow.webContents.openDevTools({ mode: 'detach' })
 }
 
@@ -35,6 +38,29 @@ function withActiveFlag (accounts) {
     ...a,
     active: !!activeToken && store.tokenOf(a.id) === activeToken
   }))
+}
+
+// Restart the Claude desktop app (MSIX) cleanly, without a console window, so it
+// re-reads the freemodel token from settings.json on next launch. A detached,
+// hidden PowerShell helper waits briefly (so this IPC reply is delivered first),
+// kills the running Claude processes, then relaunches via the AppsFolder shell
+// entry. freemodel switch itself stays open.
+function restartClaudeDesktop () {
+  const { spawn } = require('child_process')
+  if (process.platform !== 'win32') return
+  const aumid = 'Claude_pzs8sxrjxfjjc!Claude'
+  const ps = [
+    'Start-Sleep -Milliseconds 1200',
+    "Get-Process -Name 'Claude' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue",
+    'Start-Sleep -Milliseconds 800',
+    "explorer.exe 'shell:AppsFolder\\" + aumid + "'"
+  ].join('; ')
+  const child = spawn(
+    'powershell.exe',
+    ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+    { detached: true, stdio: 'ignore', windowsHide: true }
+  )
+  child.unref()
 }
 
 // Refresh usage/billing for one account using its session cookies, caching
@@ -84,12 +110,8 @@ ipcMain.handle('accounts:switchAndRestart', (_e, id) => {
   if (!token) throw new Error('Account not found')
   const acct = store.listPublic().find(a => a.id === id)
   settings.applyAccount({ token, baseUrl: acct.baseUrl })
-  // Restart Claude Code: spawn detached, then quit this app
-  const { spawn } = require('child_process')
-  const isWin = process.platform === 'win32'
-  const cmd = isWin ? 'claude' : 'claude'
-  spawn(cmd, [], { detached: true, stdio: 'ignore', shell: true }).unref()
-  setTimeout(() => app.quit(), 500)
+  notifyChanged()
+  restartClaudeDesktop()
   return { restarting: true }
 })
 
