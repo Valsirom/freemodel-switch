@@ -5,6 +5,8 @@ const settings = require('./settings')
 const store = require('./store')
 const { fetchAll } = require('./usage')
 const { openLogin, importSession } = require('./login')
+const desktop = require('./desktop')
+const winenv = require('./winenv')
 
 let mainWindow = null
 
@@ -24,16 +26,21 @@ function createWindow () {
   })
   mainWindow.removeMenu()
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
-  // settings.json can be changed by other tools (e.g. CC Switch) while we're
-  // open; re-sync the active indicator whenever the window regains focus.
+  // The Claude Desktop profile can be changed by other tools (e.g. CC Switch)
+  // while we're open; re-sync the active indicator whenever the window regains
+  // focus. The profile read is a cheap synchronous JSON read.
   mainWindow.on('focus', () => notifyChanged())
   if (process.argv.includes('--dev')) mainWindow.webContents.openDevTools({ mode: 'detach' })
 }
 
-// Mark which stored account matches the token currently in settings.json.
+// Mark which stored account matches the token Claude Desktop will actually use.
+// The desktop app reads its token from the Claude-3p gateway profile (NOT
+// settings.json and NOT an env var), so that profile is the source of truth.
+// Fall back to settings.json only off-Windows / when no profile exists.
 function withActiveFlag (accounts) {
-  const active = settings.getActive()
-  const activeToken = active && active.token
+  const desktopToken = desktop.getActiveDesktopToken()
+  const fileActive = settings.getActive()
+  const activeToken = desktopToken || (fileActive && fileActive.token)
   return accounts.map(a => ({
     ...a,
     active: !!activeToken && store.tokenOf(a.id) === activeToken
@@ -41,10 +48,16 @@ function withActiveFlag (accounts) {
 }
 
 // Restart the Claude desktop app (MSIX) cleanly, without a console window, so it
-// re-reads the freemodel token from settings.json on next launch. A detached,
-// hidden PowerShell helper waits briefly (so this IPC reply is delivered first),
-// kills the running Claude processes, then relaunches via the AppsFolder shell
-// entry. freemodel switch itself stays open.
+// re-reads the freemodel token from settings.json on next launch. A hidden
+// PowerShell helper waits briefly (so this IPC reply is delivered first), kills
+// the running Claude processes, then relaunches via the AppsFolder shell entry.
+// freemodel switch itself stays open, so the (non-detached) helper survives.
+//
+// NOTE: do NOT pass detached:true here. On Windows that launches PowerShell in a
+// new process group but the -Command payload silently never executes (verified
+// empirically: 0/4 detached spawns ran the command, 3/3 non-detached ran it),
+// which is exactly why the restart button appeared to "do nothing". Since this
+// app stays open, a plain child with windowsHide is enough to run hidden.
 function restartClaudeDesktop () {
   const { spawn } = require('child_process')
   if (process.platform !== 'win32') return
@@ -58,8 +71,9 @@ function restartClaudeDesktop () {
   const child = spawn(
     'powershell.exe',
     ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-    { detached: true, stdio: 'ignore', windowsHide: true }
+    { detached: false, stdio: 'ignore', windowsHide: true }
   )
+  child.on('error', () => { /* helper failed to spawn; nothing actionable */ })
   child.unref()
 }
 
@@ -100,7 +114,14 @@ ipcMain.handle('accounts:switch', (_e, id) => {
   const token = store.tokenOf(id)
   if (!token) throw new Error('Account not found')
   const acct = store.listPublic().find(a => a.id === id)
+  // Claude Desktop reads the Claude-3p gateway profile; Claude Code reads
+  // settings.json. Write both so either client picks up the account.
+  desktop.applyDesktop({ token, baseUrl: acct.baseUrl })
   settings.applyAccount({ token, baseUrl: acct.baseUrl })
+  // Remove the stray ANTHROPIC_AUTH_TOKEN env var an earlier build wrote to the
+  // registry: it does nothing for Desktop and CC Switch flags it as an env
+  // conflict that overrides Claude Code's config.
+  winenv.clearEnv()
   notifyChanged()
   return settings.getActive()
 })
@@ -109,10 +130,14 @@ ipcMain.handle('accounts:switchAndRestart', (_e, id) => {
   const token = store.tokenOf(id)
   if (!token) throw new Error('Account not found')
   const acct = store.listPublic().find(a => a.id === id)
+  // Desktop profile is the one that actually changes the billing account; must
+  // be written BEFORE the relaunch since Desktop reads it only at startup.
+  const dRes = desktop.applyDesktop({ token, baseUrl: acct.baseUrl })
   settings.applyAccount({ token, baseUrl: acct.baseUrl })
+  winenv.clearEnv()
   notifyChanged()
   restartClaudeDesktop()
-  return { restarting: true }
+  return { restarting: true, desktopOk: dRes.ok, desktopError: dRes.error || null }
 })
 
 ipcMain.handle('accounts:login', async (_e, id) => {

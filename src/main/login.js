@@ -47,6 +47,12 @@ function openLogin (partition, parent) {
 // account's persistent partition, then verify it works.
 async function importSession (partition, cookieValue) {
   const ses = session.fromPartition(partition)
+  // expirationDate is REQUIRED for persistence: a cookie set without one is a
+  // session cookie that Electron keeps only in memory and never writes to disk,
+  // so it vanishes on restart. Pin it ~1 year out so the imported session
+  // survives relaunches (the real session is invalidated server-side anyway if
+  // the user logs out elsewhere). Unit is seconds since the Unix epoch.
+  const oneYear = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365
   await ses.cookies.set({
     url: DASH_ORIGIN,
     name: SESSION_COOKIE,
@@ -55,8 +61,11 @@ async function importSession (partition, cookieValue) {
     path: '/',
     secure: true,
     httpOnly: true,
-    sameSite: 'lax'
+    sameSite: 'lax',
+    expirationDate: oneYear
   })
+  // Flush to disk immediately so a crash before normal shutdown can't lose it.
+  await ses.cookies.flushStore()
   return true
 }
 

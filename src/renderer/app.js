@@ -14,6 +14,26 @@ const modalTitle = document.getElementById('modal-title')
 
 let editingId = null
 
+// ---- toast ----
+const toastEl = document.getElementById('toast')
+let toastTimer = null
+let toastHideTimer = null
+
+function showToast (msg, ms) {
+  if (toastTimer) clearTimeout(toastTimer)
+  if (toastHideTimer) clearTimeout(toastHideTimer)
+  toastEl.textContent = msg
+  toastEl.classList.add('accent')
+  toastEl.classList.remove('hidden')
+  // Force reflow so the transition runs from the hidden state.
+  void toastEl.offsetWidth
+  toastEl.classList.add('show')
+  toastTimer = setTimeout(() => {
+    toastEl.classList.remove('show')
+    toastHideTimer = setTimeout(() => toastEl.classList.add('hidden'), 200)
+  }, ms || 2600)
+}
+
 async function render () {
   const accounts = await window.api.listAccounts()
   if (!accounts.length) {
@@ -111,6 +131,7 @@ cardsEl.addEventListener('click', async (e) => {
 
   if (act === 'switch') {
     btn.textContent = '⏳'; btn.disabled = true
+    showToast('Переключаю на «' + (acct ? acct.label : '') + '» и перезапускаю Claude…')
     await window.api.switchAndRestart(id)
     await render()
     // Claude desktop restarts in the background; this app stays open.
