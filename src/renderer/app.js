@@ -7,12 +7,37 @@
 const { cardHtml, cardsEl, emptyEl } = window.__fmRender
 
 const modal = document.getElementById('modal')
+const fProvider = document.getElementById('f-provider')
 const fLabel = document.getElementById('f-label')
 const fToken = document.getElementById('f-token')
 const fBaseUrl = document.getElementById('f-baseurl')
 const modalTitle = document.getElementById('modal-title')
 
 let editingId = null
+
+// Provider registry loaded once from the main process; keyed by id.
+let providersById = {}
+async function loadProviders () {
+  const list = await window.api.listProviders()
+  providersById = {}
+  fProvider.innerHTML = ''
+  for (const p of list) {
+    providersById[p.id] = p
+    const opt = document.createElement('option')
+    opt.value = p.id
+    opt.textContent = p.label
+    fProvider.appendChild(opt)
+  }
+}
+
+// Reflect the chosen provider in the base URL + token placeholder. Only auto-
+// fills the base URL when adding (not editing, where the user's value wins).
+function applyProviderToForm (autoFillBaseUrl) {
+  const p = providersById[fProvider.value]
+  if (!p) return
+  if (autoFillBaseUrl) fBaseUrl.value = p.proxyBaseUrl
+  fToken.placeholder = (p.tokenPrefix || '') + '…'
+}
 
 // ---- toast ----
 const toastEl = document.getElementById('toast')
@@ -50,10 +75,16 @@ async function render () {
 function openModal (account) {
   editingId = account ? account.id : null
   modalTitle.textContent = account ? 'Изменить аккаунт' : 'Добавить аккаунт'
+  fProvider.value = (account && account.provider) || 'freemodel'
   fLabel.value = account ? account.label : ''
   fToken.value = ''
-  fToken.placeholder = account ? '(оставь пустым — не менять)' : 'fe_oa_…'
-  fBaseUrl.value = account ? account.baseUrl : 'https://cc.freemodel.dev'
+  // Editing keeps the stored base URL; adding auto-fills from the provider.
+  if (account) {
+    fBaseUrl.value = account.baseUrl
+    fToken.placeholder = '(оставь пустым — не менять)'
+  } else {
+    applyProviderToForm(true)
+  }
   modal.classList.remove('hidden')
   fLabel.focus()
 }
@@ -68,10 +99,18 @@ function closeModal () {
 const importModal = document.getElementById('import-modal')
 const importValue = document.getElementById('import-value')
 const importError = document.getElementById('import-error')
+const importHint = document.getElementById('import-hint')
 let importId = null
 
-function openImportModal (id) {
-  importId = id
+function openImportModal (account) {
+  importId = account.id
+  const p = providersById[account.provider] || providersById.freemodel
+  if (p) {
+    const host = p.dashOrigin.replace(/^https?:\/\//, '')
+    importHint.innerHTML = 'Открой <code>' + host + '</code> в браузере (где ты залогинен) → F12 → ' +
+      'Application → Cookies → <code>' + host + '</code> → скопируй значение cookie ' +
+      '<code>' + p.sessionCookie + '</code> и вставь сюда.'
+  }
   importValue.value = ''
   importError.classList.add('hidden')
   importError.textContent = ''
@@ -104,14 +143,16 @@ async function saveImport () {
 }
 
 async function saveModal () {
+  const provider = fProvider.value || 'freemodel'
   const label = fLabel.value.trim()
   const token = fToken.value.trim()
-  const baseUrl = fBaseUrl.value.trim() || 'https://cc.freemodel.dev'
+  const fallbackBase = (providersById[provider] && providersById[provider].proxyBaseUrl) || 'https://cc.freemodel.dev'
+  const baseUrl = fBaseUrl.value.trim() || fallbackBase
   if (editingId) {
-    await window.api.updateAccount(editingId, { label, baseUrl, token: token || undefined })
+    await window.api.updateAccount(editingId, { label, baseUrl, provider, token: token || undefined })
   } else {
     if (!token) { fToken.focus(); return }
-    await window.api.addAccount({ label, token, baseUrl })
+    await window.api.addAccount({ label, token, baseUrl, provider })
   }
   closeModal()
   await render()
@@ -140,7 +181,7 @@ cardsEl.addEventListener('click', async (e) => {
     await window.api.login(id)
     await render()
   } else if (act === 'import') {
-    openImportModal(id)
+    openImportModal(acct)
   } else if (act === 'refresh') {
     btn.textContent = '…'
     await window.api.refresh(id)
@@ -167,6 +208,7 @@ document.getElementById('btn-refresh').addEventListener('click', async (e) => {
 
 document.getElementById('modal-cancel').addEventListener('click', closeModal)
 document.getElementById('modal-save').addEventListener('click', saveModal)
+fProvider.addEventListener('change', () => applyProviderToForm(!editingId))
 modal.addEventListener('click', (e) => { if (e.target === modal) closeModal() })
 
 document.getElementById('import-cancel').addEventListener('click', closeImportModal)
@@ -182,6 +224,9 @@ document.addEventListener('keydown', (e) => {
 
 window.api.onChanged(render)
 
-// Initial paint, then a background refresh of usage for all accounts.
-render().then(() => window.api.refreshAll()).then(render)
+// Load providers first (the add/edit picker needs them), then paint and refresh.
+loadProviders()
+  .then(render)
+  .then(() => window.api.refreshAll())
+  .then(render)
 })()

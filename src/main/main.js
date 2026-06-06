@@ -7,6 +7,7 @@ const { fetchAll } = require('./usage')
 const { openLogin, importSession } = require('./login')
 const desktop = require('./desktop')
 const winenv = require('./winenv')
+const providers = require('./providers')
 
 let mainWindow = null
 
@@ -83,7 +84,7 @@ async function refreshOne (id) {
   const acct = store.listPublic().find(a => a.id === id)
   if (!acct) return null
   try {
-    const res = await fetchAll(acct.partition)
+    const res = await fetchAll(acct.partition, acct.provider)
     if (!res.loggedIn) {
       store.setData(id, { fetchError: 'not-logged-in' })
     } else {
@@ -143,18 +144,21 @@ ipcMain.handle('accounts:switchAndRestart', (_e, id) => {
 ipcMain.handle('accounts:login', async (_e, id) => {
   const acct = store.listPublic().find(a => a.id === id)
   if (!acct) throw new Error('Account not found')
-  await openLogin(acct.partition, mainWindow)
+  await openLogin(acct.partition, mainWindow, acct.provider)
   return refreshOne(id)
 })
 
-// Import a bm_session cookie copied from the user's browser, then refresh.
+// Import the provider's session cookie copied from the user's browser, refresh.
 ipcMain.handle('accounts:importSession', async (_e, { id, cookieValue }) => {
   const acct = store.listPublic().find(a => a.id === id)
   if (!acct) throw new Error('Account not found')
   if (!cookieValue || !cookieValue.trim()) throw new Error('Empty cookie value')
-  await importSession(acct.partition, cookieValue)
+  await importSession(acct.partition, cookieValue, acct.provider)
   return refreshOne(id)
 })
+
+// Provider registry for the renderer's add/edit picker.
+ipcMain.handle('providers:list', () => providers.list())
 
 ipcMain.handle('accounts:refresh', (_e, id) => refreshOne(id))
 

@@ -29,6 +29,9 @@
   <div id="modal" class="modal-backdrop hidden">
     <div class="modal">
       <h2 id="modal-title">Добавить аккаунт</h2>
+      <label>Провайдер
+        <select id="f-provider"></select>
+      </label>
       <label>Название
         <input id="f-label" type="text" placeholder="например, Личный / Рабочий" />
       </label>
@@ -50,7 +53,7 @@
   <div id="import-modal" class="modal-backdrop hidden">
     <div class="modal">
       <h2>Импорт сессии</h2>
-      <p class="muted">Открой <code>freemodel.dev</code> в браузере (где ты залогинен) → F12 → Application → Cookies → <code>freemodel.dev</code> → скопируй значение сессионной cookie и вставь сюда.</p>
+      <p id="import-hint" class="muted">Открой дашборд провайдера в браузере (где ты залогинен) → F12 → Application → Cookies → скопируй значение сессионной cookie и вставь сюда.</p>
       <label>Значение cookie
         <input id="import-value" type="text" placeholder="вставь значение cookie" spellcheck="false" autocomplete="off" />
       </label>

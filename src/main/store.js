@@ -54,6 +54,7 @@ function toPublic (a) {
   return {
     id: a.id,
     label: a.label,
+    provider: a.provider || 'freemodel',
     baseUrl: a.baseUrl,
     tokenHint: a.tokenHint,
     partition: a.partition,
@@ -80,12 +81,13 @@ function tokenHint (token) {
   return token.slice(0, 8) + '…' + token.slice(-4)
 }
 
-function add ({ label, token, baseUrl }) {
+function add ({ label, token, baseUrl, provider }) {
   const accounts = load()
   const id = crypto.randomBytes(6).toString('hex')
   accounts.push({
     id,
     label: label || 'Account',
+    provider: provider || 'freemodel',
     token: encrypt(token),
     tokenHint: tokenHint(token),
     baseUrl: baseUrl || 'https://cc.freemodel.dev',
@@ -95,12 +97,13 @@ function add ({ label, token, baseUrl }) {
   return id
 }
 
-function update (id, { label, token, baseUrl }) {
+function update (id, { label, token, baseUrl, provider }) {
   const accounts = load()
   const a = accounts.find(x => x.id === id)
   if (!a) return false
   if (typeof label === 'string') a.label = label
   if (typeof baseUrl === 'string') a.baseUrl = baseUrl
+  if (typeof provider === 'string') a.provider = provider
   if (token) { a.token = encrypt(token); a.tokenHint = tokenHint(token) }
   persist(accounts)
   return true

@@ -1,16 +1,19 @@
 'use strict'
 const { session, net } = require('electron')
+const providers = require('./providers')
 
-const DASH_ORIGIN = 'https://freemodel.dev'
+// Kept for backward compat (login.js historically imported it). Prefer the
+// per-provider dashOrigin from providers.js.
+const DASH_ORIGIN = providers.PROVIDERS.freemodel.dashOrigin
 
 // Fetch a dashboard JSON endpoint using the cookies stored in the account's
 // own persistent session partition. Returns { ok, status, data }.
-function fetchJson (partition, pathname) {
+function fetchJson (partition, origin, pathname) {
   return new Promise((resolve) => {
     const ses = session.fromPartition(partition)
     const request = net.request({
       method: 'GET',
-      url: DASH_ORIGIN + pathname,
+      url: origin + pathname,
       session: ses,
       useSessionCookies: true
     })
@@ -29,23 +32,49 @@ function fetchJson (partition, pathname) {
   })
 }
 
-// Pull auth + usage + billing for one account. /api/auth/me returns
-// {user: {...}} when logged in, or {user: null} (HTTP 200) when not.
-async function fetchAll (partition) {
-  const me = await fetchJson(partition, '/api/auth/me')
+// Fetch a page as text (for providers whose window data is server-rendered into
+// HTML rather than exposed via a JSON endpoint). Returns { ok, status, body }.
+function fetchText (partition, origin, pathname) {
+  return new Promise((resolve) => {
+    const ses = session.fromPartition(partition)
+    const request = net.request({ method: 'GET', url: origin + pathname, session: ses, useSessionCookies: true })
+    request.setHeader('Accept', 'text/html')
+    let body = ''
+    request.on('response', (response) => {
+      response.on('data', (c) => { body += c.toString() })
+      response.on('end', () => resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, body }))
+    })
+    request.on('error', () => resolve({ ok: false, status: 0, body: '' }))
+    request.end()
+  })
+}
+
+const loggedOut = { loggedIn: false, account: null, usage: null, billing: null }
+
+// Dispatch to the right dashboard shape for the account's provider. Returns a
+// unified { loggedIn, account, usage, billing } regardless of provider so the
+// renderer can stay mostly provider-agnostic.
+async function fetchAll (partition, providerId) {
+  const p = providers.get(providerId)
+  if (p.api === 'aerolink') return fetchAerolink(partition, p)
+  return fetchFreemodel(partition, p)
+}
+
+// ---- freemodel: /api/auth/me + /api/usage + /api/billing (5h/week windows) ----
+
+async function fetchFreemodel (partition, p) {
+  const me = await fetchJson(partition, p.dashOrigin, '/api/auth/me')
   const user = me.data && me.data.user
-  if (me.status === 401 || !user || !user.email) {
-    return { loggedIn: false, account: null, usage: null, billing: null }
-  }
+  if (me.status === 401 || !user || !user.email) return loggedOut
   const [usage, billing] = await Promise.all([
-    fetchJson(partition, '/api/usage'),
-    fetchJson(partition, '/api/billing')
+    fetchJson(partition, p.dashOrigin, '/api/usage'),
+    fetchJson(partition, p.dashOrigin, '/api/billing')
   ])
   return {
     loggedIn: true,
     account: { name: user.name || '', email: user.email || '' },
     usage: usage.ok ? normalizeUsage(usage.data) : null,
-    billing: billing.ok ? normalizeBilling(billing.data) : null
+    billing: billing.ok ? normalizeFreemodelBilling(billing.data) : null
   }
 }
 
@@ -68,20 +97,74 @@ function normalizeUsage (d) {
   }
 }
 
-// Real /api/billing nests the plan under `subscription` and reports credit as
-// top-level `creditCents`. currentPeriodEnd is "YYYY-MM-DD HH:MM:SS" UTC.
-// signupExpiresAt (also "YYYY-MM-DD HH:MM:SS" UTC) is when trial/signup credits expire.
-function normalizeBilling (d) {
+// /api/billing nests the plan under `subscription`, credit is top-level
+// `creditCents`, and signupExpiresAt is when trial credits expire.
+function normalizeFreemodelBilling (d) {
   d = d || {}
   const sub = d.subscription || {}
   return {
     planId: sub.planId || 'free',
+    planName: null,
     status: sub.status || 'unknown',
     currentPeriodEnd: sub.currentPeriodEnd || null,
     cancelAtPeriodEnd: !!sub.cancelAtPeriodEnd,
     renewalType: sub.renewalType || null,
     credits: Number(d.creditCents) || 0,
-    signupExpiresAt: d.signupExpiresAt || null
+    trialExpiresAt: d.signupExpiresAt || null,
+    todaySpendCents: null
+  }
+}
+
+// ---- aerolink: Better Auth get-session (balance) + /api/keys (plan/spend) ----
+// No 5h/week windows — it's a pay-from-balance model. user.bonusCents is the
+// balance, user.starterExpiresAt the trial expiry, /api/keys has plan + spend.
+
+// The 5h/weekly windows aren't exposed via JSON — they're server-rendered into
+// the /dashboard/usage page. These are rate-limit counters (the weekly window's
+// "used" is NOT the same as weekly $ spend), so they can't be derived from logs;
+// we scrape them from the page. Markup splits "$" and the number with React
+// comment nodes, so we strip <!-- --> and tags first. Literal regexes only —
+// a RegExp built from a string variable mysteriously fails to match here.
+function parseAerolinkWindows (html) {
+  const text = String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+  const toWin = (m) => m ? { usedCents: Math.round(+m[2] * 100), limitCents: Math.round(+m[3] * 100), resetsAt: 0 } : null
+  const window5h = toWin(text.match(/5-hour window[^%]*?([0-9]+)%[^$]*?\$([0-9.]+)\s*\/\s*\$([0-9.]+)/))
+  const windowWeek = toWin(text.match(/Weekly window[^%]*?([0-9]+)%[^$]*?\$([0-9.]+)\s*\/\s*\$([0-9.]+)/))
+  const reqM = text.match(/([0-9][0-9.,]*)\s*Requests\s*·?\s*weekly/i)
+  const totalRequests = reqM ? Number(String(reqM[1]).replace(/,/g, '')) || 0 : 0
+  if (!window5h && !windowWeek) return null
+  return { totalRequests, totalTokens: 0, window5h: window5h || win(), windowWeek: windowWeek || win() }
+}
+
+async function fetchAerolink (partition, p) {
+  const sess = await fetchJson(partition, p.dashOrigin, '/api/auth/get-session')
+  const user = sess.data && sess.data.user
+  if (sess.status === 401 || !user || !user.email) return loggedOut
+  const [keys, usageHtml] = await Promise.all([
+    fetchJson(partition, p.dashOrigin, '/api/keys'),
+    fetchText(partition, p.dashOrigin, '/dashboard/usage')
+  ])
+  const k = (keys.ok && keys.data) || {}
+  const todaySpend = Array.isArray(k.keys)
+    ? k.keys.reduce((s, x) => s + (Number(x.todaySpendCents) || 0), 0)
+    : 0
+  return {
+    loggedIn: true,
+    account: { name: user.name || '', email: user.email || '' },
+    usage: usageHtml.ok ? parseAerolinkWindows(usageHtml.body) : null,
+    billing: {
+      planId: null,
+      planName: k.planName || null,
+      status: 'active',
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      renewalType: null,
+      credits: Number(user.bonusCents) || 0,
+      trialExpiresAt: user.starterExpiresAt || null,
+      todaySpendCents: todaySpend,
+      apiKeyLimit: Number(k.apiKeyLimit) || 0,
+      activeApiKeys: Number(k.activeApiKeys) || 0
+    }
   }
 }
 

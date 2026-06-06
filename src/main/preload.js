@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('api', {
   importSession: (id, cookieValue) => ipcRenderer.invoke('accounts:importSession', { id, cookieValue }),
   refresh: (id) => ipcRenderer.invoke('accounts:refresh', id),
   refreshAll: () => ipcRenderer.invoke('accounts:refreshAll'),
+  listProviders: () => ipcRenderer.invoke('providers:list'),
   onChanged: (cb) => ipcRenderer.on('accounts:changed', () => cb())
 })

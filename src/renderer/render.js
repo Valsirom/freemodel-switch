@@ -33,19 +33,39 @@ function fmtResets (ts) {
   return 'сброс через ' + m + ' мин'
 }
 
-// currentPeriodEnd comes as "YYYY-MM-DD HH:MM:SS" in UTC (no zone). Convert the
-// space to "T" and append "Z" to parse. Show date + days remaining; the tail
-// reflects whether it renews, cancels, or just runs out (manual renewal).
+// Parse a server date. freemodel sends "YYYY-MM-DD HH:MM:SS" (UTC, no zone);
+// aerolink sends ISO "2026-06-09T00:00:00.000Z". Handle both.
+function parseDate (s) {
+  if (!s) return null
+  const str = String(s)
+  const d = str.includes('T') ? new Date(str) : new Date(str.replace(' ', 'T') + 'Z')
+  return isNaN(d.getTime()) ? null : d
+}
+
+// Format a date string into { dateStr, days } (days remaining from now).
+function fmtDate (s) {
+  const d = parseDate(s)
+  if (!d) return null
+  const days = Math.ceil((d.getTime() - Date.now()) / 86400000)
+  const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
+  return { dateStr, days }
+}
+
+// Subscription period end (freemodel) with a renew/cancel/runs-out tail.
 function fmtExpiry (billing) {
   if (!billing || !billing.currentPeriodEnd) return null
-  const end = new Date(String(billing.currentPeriodEnd).replace(' ', 'T') + 'Z')
-  if (isNaN(end.getTime())) return null
-  const days = Math.ceil((end.getTime() - Date.now()) / 86400000)
-  const dateStr = end.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' })
+  const f = fmtDate(billing.currentPeriodEnd)
+  if (!f) return null
   const tail = billing.cancelAtPeriodEnd
     ? 'заканчивается'
     : (billing.renewalType === 'manual' ? 'действует до' : 'продление')
-  return { dateStr, days, tail }
+  return { dateStr: f.dateStr, days: f.days, tail }
+}
+
+// Colored date span by urgency (days remaining).
+function dateSpan (label, dateStr, days) {
+  const color = days <= 3 ? 'var(--red)' : days <= 7 ? 'var(--amber)' : 'var(--text)'
+  return `<span>${label}: <b style="color:${color}">${esc(dateStr)}</b> (${days} дн)</span>`
 }
 
 const PLAN_NAMES = { free: 'Free', pro: 'Pro', pro_plus: 'Pro+', max: 'Max', ultra: 'Ultra', power: 'Power' }
@@ -76,41 +96,59 @@ function usageBar (label, w) {
     </div>`
 }
 
-function cardHtml (a) {
-  const loggedOut = a.fetchError === 'not-logged-in' || (!a.usage && !a.account)
+// freemodel card body: 5h/week spending bars + credits + trial expiry.
+function freemodelBody (a) {
+  const bars = a.usage
+    ? usageBar('5 часов', a.usage.window5h) + usageBar('Неделя', a.usage.windowWeek)
+    : '<p class="muted">Нет данных использования.</p>'
+  const metaParts = []
+  if (a.account && a.account.email) metaParts.push(`<span>${esc(a.account.email)}</span>`)
+  if (a.usage) metaParts.push(`<span><b>${a.usage.totalRequests}</b> запросов</span>`)
   const exp = fmtExpiry(a.billing)
-  const planName = a.billing ? planLabel(a.billing.planId) : null
+  if (exp) metaParts.push(dateSpan(exp.tail, exp.dateStr, exp.days))
+  // "Available now" = bonus credits + remainder of the current 5h window.
+  const win5 = a.usage && a.usage.window5h
+  const windowRemainCents = win5 ? Math.max(0, win5.limitCents - win5.usedCents) : 0
+  const availableCents = (a.billing ? a.billing.credits : 0) + windowRemainCents
+  if (availableCents > 0) metaParts.push(`<span>кредиты: <b>${fmtCents(availableCents)}</b></span>`)
+  if (a.billing && a.billing.trialExpiresAt) {
+    const t = fmtDate(a.billing.trialExpiresAt)
+    if (t) metaParts.push(dateSpan('trial кредиты сгорают', t.dateStr, t.days))
+  }
+  return `<div class="bars">${bars}</div><div class="meta">${metaParts.join('')}</div>`
+}
+
+// aerolink card body: 5h/weekly rate-limit bars (scraped from the dashboard) +
+// balance + plan + today spend + trial.
+function aerolinkBody (a) {
+  const b = a.billing
+  const bars = (a.usage && a.usage.window5h)
+    ? usageBar('5 часов', a.usage.window5h) + usageBar('Неделя', a.usage.windowWeek)
+    : ''
+  const metaParts = []
+  if (a.account && a.account.email) metaParts.push(`<span>${esc(a.account.email)}</span>`)
+  if (a.usage && a.usage.totalRequests) metaParts.push(`<span><b>${a.usage.totalRequests}</b> запросов/нед</span>`)
+  if (b && b.credits) metaParts.push(`<span>баланс: <b>${fmtCents(b.credits)}</b></span>`)
+  if (b && b.todaySpendCents != null) metaParts.push(`<span>сегодня: <b>${fmtCents(b.todaySpendCents)}</b></span>`)
+  if (b && b.apiKeyLimit) metaParts.push(`<span>ключи: <b>${b.activeApiKeys}/${b.apiKeyLimit}</b></span>`)
+  if (b && b.trialExpiresAt) {
+    const t = fmtDate(b.trialExpiresAt)
+    if (t) metaParts.push(dateSpan('trial кредиты сгорают', t.dateStr, t.days))
+  }
+  return `${bars ? `<div class="bars">${bars}</div>` : ''}<div class="meta">${metaParts.join('')}</div>`
+}
+
+function cardHtml (a) {
+  const loggedOut = a.fetchError === 'not-logged-in' || (!a.account && !a.usage && !a.billing)
+  const planName = a.billing ? (a.billing.planName || planLabel(a.billing.planId)) : null
 
   let body
   if (loggedOut) {
-    body = `<p class="notice">Войди в дашборд, чтобы видеть использование и подписку.</p>`
+    body = `<p class="notice">Войди в дашборд (или импортируй сессию), чтобы видеть баланс и использование.</p>`
+  } else if (a.provider === 'aerolink') {
+    body = aerolinkBody(a)
   } else {
-    const bars = a.usage
-      ? usageBar('5 часов', a.usage.window5h) + usageBar('Неделя', a.usage.windowWeek)
-      : '<p class="muted">Нет данных использования.</p>'
-    const metaParts = []
-    if (a.account && a.account.email) metaParts.push(`<span>${esc(a.account.email)}</span>`)
-    if (a.usage) metaParts.push(`<span><b>${a.usage.totalRequests}</b> запросов</span>`)
-    if (exp) {
-      const color = exp.days <= 3 ? 'var(--red)' : exp.days <= 7 ? 'var(--amber)' : 'var(--text)'
-      metaParts.push(`<span>${exp.tail}: <b style="color:${color}">${esc(exp.dateStr)}</b> (${exp.days} дн)</span>`)
-    }
-    // "Available now" on the dashboard = bonus credits + whatever is left in the
-    // current 5-hour window (limit − used). Showing only creditCents under-reports
-    // when the 5h window isn't fully spent (it just happens to match when it is).
-    const win5 = a.usage && a.usage.window5h
-    const windowRemainCents = win5 ? Math.max(0, win5.limitCents - win5.usedCents) : 0
-    const availableCents = (a.billing ? a.billing.credits : 0) + windowRemainCents
-    if (availableCents > 0) metaParts.push(`<span>кредиты: <b>${fmtCents(availableCents)}</b></span>`)
-    // Trial/signup credit expiry (if present and not yet expired).
-    if (a.billing && a.billing.signupExpiresAt) {
-      const trialExp = fmtExpiry({ currentPeriodEnd: a.billing.signupExpiresAt })
-      if (trialExp) {
-        const color = trialExp.days <= 3 ? 'var(--red)' : trialExp.days <= 7 ? 'var(--amber)' : 'var(--text)'
-        metaParts.push(`<span>trial кредиты сгорают: <b style="color:${color}">${esc(trialExp.dateStr)}</b> (${trialExp.days} дн)</span>`)
-      }
-    }
-    body = `<div class="bars">${bars}</div><div class="meta">${metaParts.join('')}</div>`
+    body = freemodelBody(a)
   }
 
   const planBadge = planName ? `<span class="badge plan">${esc(planName)}</span>` : ''
@@ -131,7 +169,7 @@ function cardHtml (a) {
         ${a.active ? '●' : '▶'}
       </button>
       <button class="btn ghost small" data-act="login">Войти</button>
-      <button class="btn ghost small" data-act="import" title="Вставить cookie bm_session из браузера, где ты уже залогинен">Импорт сессии</button>
+      <button class="btn ghost small" data-act="import" title="Вставить сессионную cookie из браузера, где ты уже залогинен">Импорт сессии</button>
       <button class="btn ghost small" data-act="refresh">⟳</button>
       <span class="spacer"></span>
       <button class="btn ghost small" data-act="edit">Изм.</button>

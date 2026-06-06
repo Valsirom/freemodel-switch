@@ -1,17 +1,13 @@
 'use strict'
 const { BrowserWindow, session } = require('electron')
-const { DASH_ORIGIN } = require('./usage')
+const providers = require('./providers')
 
-// freemodel sets exactly one HttpOnly session cookie on successful login
-// (Google OAuth or email OTP) and clears it on logout. Detecting it precisely
-// lets the login window auto-close the instant auth succeeds.
-const SESSION_COOKIE = 'bm_session'
-
-// Open the freemodel dashboard inside a BrowserWindow bound to this account's
-// persistent session partition. The user logs in (Google / OTP) themselves —
-// we never handle their password, we only reuse the resulting session cookies.
-// Resolves true once the bm_session cookie appears, false if the window closes.
-function openLogin (partition, parent) {
+// Open the provider's dashboard inside a BrowserWindow bound to this account's
+// persistent session partition. The user logs in themselves — we never handle
+// their password, we only reuse the resulting session cookies. Resolves true
+// once the provider's session cookie appears, false if the window closes.
+function openLogin (partition, parent, providerId) {
+  const p = providers.get(providerId)
   return new Promise((resolve) => {
     const ses = session.fromPartition(partition)
     const win = new BrowserWindow({
@@ -19,7 +15,7 @@ function openLogin (partition, parent) {
       height: 720,
       parent,
       modal: false,
-      title: 'freemodel.dev login',
+      title: p.dashOrigin.replace(/^https?:\/\//, '') + ' login',
       webPreferences: { session: ses, partition }
     })
     let done = false
@@ -27,8 +23,8 @@ function openLogin (partition, parent) {
 
     const timer = setInterval(async () => {
       try {
-        const cookies = await ses.cookies.get({ url: DASH_ORIGIN })
-        const hasAuth = cookies.some(c => c.name === SESSION_COOKIE && c.value)
+        const cookies = await ses.cookies.get({ url: p.dashOrigin })
+        const hasAuth = cookies.some(c => c.name === p.sessionCookie && c.value)
         if (hasAuth) {
           clearInterval(timer)
           finish(true)
@@ -38,26 +34,26 @@ function openLogin (partition, parent) {
     }, 1200)
 
     win.on('closed', () => { clearInterval(timer); finish(false) })
-    win.loadURL(DASH_ORIGIN + '/dashboard')
+    win.loadURL(p.dashOrigin + '/dashboard')
   })
 }
 
-// Import an existing browser session: inject a bm_session cookie value (copied
-// by the user from a browser where they're already logged in) into this
-// account's persistent partition, then verify it works.
-async function importSession (partition, cookieValue) {
+// Import an existing browser session: inject the provider's session cookie value
+// (copied by the user from a browser where they're already logged in) into this
+// account's persistent partition.
+async function importSession (partition, cookieValue, providerId) {
+  const p = providers.get(providerId)
   const ses = session.fromPartition(partition)
   // expirationDate is REQUIRED for persistence: a cookie set without one is a
   // session cookie that Electron keeps only in memory and never writes to disk,
   // so it vanishes on restart. Pin it ~1 year out so the imported session
-  // survives relaunches (the real session is invalidated server-side anyway if
-  // the user logs out elsewhere). Unit is seconds since the Unix epoch.
+  // survives relaunches. Unit is seconds since the Unix epoch.
   const oneYear = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365
   await ses.cookies.set({
-    url: DASH_ORIGIN,
-    name: SESSION_COOKIE,
+    url: p.dashOrigin,
+    name: p.sessionCookie,
     value: cookieValue.trim(),
-    domain: 'freemodel.dev',
+    domain: p.cookieDomain,
     path: '/',
     secure: true,
     httpOnly: true,
@@ -69,4 +65,4 @@ async function importSession (partition, cookieValue) {
   return true
 }
 
-module.exports = { openLogin, importSession, SESSION_COOKIE }
+module.exports = { openLogin, importSession }
