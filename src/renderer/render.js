@@ -131,6 +131,8 @@ function aerolinkBody (a) {
   if (b && b.credits) metaParts.push(`<span>баланс: <b>${fmtCents(b.credits)}</b></span>`)
   if (b && b.todaySpendCents != null) metaParts.push(`<span>сегодня: <b>${fmtCents(b.todaySpendCents)}</b></span>`)
   if (b && b.apiKeyLimit) metaParts.push(`<span>ключи: <b>${b.activeApiKeys}/${b.apiKeyLimit}</b></span>`)
+  const exp = fmtExpiry(b)
+  if (exp) metaParts.push(dateSpan(exp.tail, exp.dateStr, exp.days))
   if (b && b.trialExpiresAt) {
     const t = fmtDate(b.trialExpiresAt)
     if (t) metaParts.push(dateSpan('trial кредиты сгорают', t.dateStr, t.days))

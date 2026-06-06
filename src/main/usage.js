@@ -136,13 +136,32 @@ function parseAerolinkWindows (html) {
   return { totalRequests, totalTokens: 0, window5h: window5h || win(), windowWeek: windowWeek || win() }
 }
 
+const MONTHS = {
+  january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
+  july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
+}
+
+// The plan renewal date ("Renews July 6, 2026") is server-rendered into the
+// /dashboard/billing page. Parse "Month D, YYYY" into an ISO string (midnight
+// UTC) so the card can show days remaining. Returns ISO string or null.
+function parseAerolinkRenewal (html) {
+  const text = String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+  const m = text.match(/Renews?\s+([A-Za-z]+)\s+([0-9]{1,2}),?\s+([0-9]{4})/i)
+  if (!m) return null
+  const mm = MONTHS[m[1].toLowerCase()]
+  if (!mm) return null
+  const dd = String(m[2]).padStart(2, '0')
+  return m[3] + '-' + mm + '-' + dd + 'T00:00:00.000Z'
+}
+
 async function fetchAerolink (partition, p) {
   const sess = await fetchJson(partition, p.dashOrigin, '/api/auth/get-session')
   const user = sess.data && sess.data.user
   if (sess.status === 401 || !user || !user.email) return loggedOut
-  const [keys, usageHtml] = await Promise.all([
+  const [keys, usageHtml, billingHtml] = await Promise.all([
     fetchJson(partition, p.dashOrigin, '/api/keys'),
-    fetchText(partition, p.dashOrigin, '/dashboard/usage')
+    fetchText(partition, p.dashOrigin, '/dashboard/usage'),
+    fetchText(partition, p.dashOrigin, '/dashboard/billing')
   ])
   const k = (keys.ok && keys.data) || {}
   const todaySpend = Array.isArray(k.keys)
@@ -156,7 +175,7 @@ async function fetchAerolink (partition, p) {
       planId: null,
       planName: k.planName || null,
       status: 'active',
-      currentPeriodEnd: null,
+      currentPeriodEnd: billingHtml.ok ? parseAerolinkRenewal(billingHtml.body) : null,
       cancelAtPeriodEnd: false,
       renewalType: null,
       credits: Number(user.bonusCents) || 0,
