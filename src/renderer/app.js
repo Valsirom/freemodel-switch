@@ -12,8 +12,10 @@ const fLabel = document.getElementById('f-label')
 const fToken = document.getElementById('f-token')
 const fBaseUrl = document.getElementById('f-baseurl')
 const modalTitle = document.getElementById('modal-title')
+const tabsEl = document.getElementById('tabs')
 
 let editingId = null
+let activeTab = null // selected provider tab
 
 // Provider registry loaded once from the main process; keyed by id.
 let providersById = {}
@@ -59,15 +61,41 @@ function showToast (msg, ms) {
   }, ms || 2600)
 }
 
+// One tab per provider, with a per-tab account count. Hidden entirely until
+// providers are loaded.
+function renderTabs (accounts) {
+  const ids = Object.keys(providersById)
+  if (!ids.length) { tabsEl.innerHTML = ''; return }
+  const countOf = (id) => accounts.filter(a => (a.provider || 'freemodel') === id).length
+  tabsEl.innerHTML = ids.map(id => {
+    const p = providersById[id]
+    const cls = 'tab' + (id === activeTab ? ' active' : '')
+    return `<button class="${cls}" data-tab="${id}">${p.label}<span class="count">${countOf(id)}</span></button>`
+  }).join('')
+}
+
 async function render () {
   const accounts = await window.api.listAccounts()
-  if (!accounts.length) {
+  // Default tab on first paint: first provider that actually has accounts,
+  // else the first provider in the registry.
+  if (activeTab === null) {
+    const ids = Object.keys(providersById)
+    activeTab = ids.find(id => accounts.some(a => (a.provider || 'freemodel') === id)) || ids[0] || 'freemodel'
+  }
+  renderTabs(accounts)
+
+  const shown = accounts.filter(a => (a.provider || 'freemodel') === activeTab)
+  if (!shown.length) {
     cardsEl.innerHTML = ''
+    const label = providersById[activeTab] ? providersById[activeTab].label : activeTab
+    emptyEl.innerHTML = accounts.length
+      ? `<p>В разделе «${label}» пока нет аккаунтов.</p><p class="muted">Нажми «Добавить аккаунт» и выбери провайдер «${label}».</p>`
+      : '<p>Пока нет аккаунтов.</p><p class="muted">Нажми «Добавить аккаунт» и вставь токен из настроек.</p>'
     emptyEl.classList.remove('hidden')
     return
   }
   emptyEl.classList.add('hidden')
-  cardsEl.innerHTML = accounts.map(cardHtml).join('')
+  cardsEl.innerHTML = shown.map(cardHtml).join('')
 }
 
 // ---- modal ----
@@ -153,6 +181,7 @@ async function saveModal () {
   } else {
     if (!token) { fToken.focus(); return }
     await window.api.addAccount({ label, token, baseUrl, provider })
+    activeTab = provider // jump to the new account's tab so it's visible
   }
   closeModal()
   await render()
@@ -194,6 +223,16 @@ cardsEl.addEventListener('click', async (e) => {
       await render()
     }
   }
+})
+
+// ---- tabs ----
+
+tabsEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]')
+  if (!btn) return
+  if (btn.dataset.tab === activeTab) return
+  activeTab = btn.dataset.tab
+  render()
 })
 
 // ---- top bar ----

@@ -148,15 +148,29 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
 }
 .modal h2 { margin: 0; font-size: 17px; }
 .modal label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
-.modal input {
+.modal input,
+.modal select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 10px;
   color: var(--text);
   font-size: 13px;
+  font-family: inherit;
 }
-.modal input:focus { outline: none; border-color: var(--accent-2); }
+.modal input:focus,
+.modal select:focus { outline: none; border-color: var(--accent-2); }
+.modal select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  /* custom caret so the native (black) dropdown arrow is gone */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b93a7' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.modal select option { background: var(--panel); color: var(--text); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
 /* ---- toast ---- */
@@ -184,3 +198,41 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
 }
 .toast.hidden { display: none; }
 .toast.accent { border-color: var(--accent-2); }
+
+/* ---- provider tabs ---- */
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 14px 20px 0;
+  flex-wrap: wrap;
+}
+.tabs:empty { display: none; }
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.tab:hover { background: var(--btn-hover); }
+.tab.active {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #fff;
+}
+.tab .count {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(127, 127, 127, 0.18);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 17px;
+}
+.tab.active .count { background: rgba(255, 255, 255, 0.25); }
