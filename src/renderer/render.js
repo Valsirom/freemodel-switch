@@ -126,6 +126,11 @@ function aerolinkBody (a) {
   const bars = (a.usage && a.usage.window5h)
     ? usageBar('5 часов', a.usage.window5h) + usageBar('Неделя', a.usage.windowWeek)
     : ''
+  // Page loaded but windows couldn't be scraped => aerolink likely changed the
+  // markup. Show a clear note instead of silently dropping the bars.
+  const staleNote = (!bars && a.windowsStale)
+    ? '<p class="notice warn-note">Окна 5ч/неделя недоступны — вероятно, дашборд aerolink изменил вёрстку. Баланс и план ниже актуальны.</p>'
+    : ''
   const metaParts = []
   if (a.account && a.account.email) metaParts.push(`<span>${esc(a.account.email)}</span>`)
   if (a.usage && a.usage.totalRequests) metaParts.push(`<span><b>${a.usage.totalRequests}</b> запросов/нед</span>`)
@@ -138,7 +143,7 @@ function aerolinkBody (a) {
     const t = fmtDate(b.trialExpiresAt)
     if (t) metaParts.push(dateSpan('trial кредиты сгорают', t.dateStr, t.days))
   }
-  return `${bars ? `<div class="bars">${bars}</div>` : ''}<div class="meta">${metaParts.join('')}</div>`
+  return `${bars ? `<div class="bars">${bars}</div>` : ''}${staleNote}<div class="meta">${metaParts.join('')}</div>`
 }
 
 function cardHtml (a) {

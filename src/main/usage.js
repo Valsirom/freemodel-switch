@@ -175,15 +175,22 @@ async function fetchAerolink (partition, p) {
   const todaySpend = Array.isArray(k.keys)
     ? k.keys.reduce((s, x) => s + (Number(x.todaySpendCents) || 0), 0)
     : 0
+  const usage = usageHtml.ok ? parseAerolinkWindows(usageHtml.body) : null
+  const renewal = billingHtml.ok ? parseAerolinkRenewal(billingHtml.body) : null
+  // The usage page loaded (HTTP 200) but we couldn't find the windows in it —
+  // a strong signal aerolink changed the markup and the scraper needs updating.
+  // Surface it so the card shows a clear note instead of silently empty bars.
+  const windowsStale = usageHtml.ok && !usage
   return {
     loggedIn: true,
     account: { name: user.name || '', email: user.email || '' },
-    usage: usageHtml.ok ? parseAerolinkWindows(usageHtml.body) : null,
+    usage,
+    windowsStale,
     billing: {
       planId: null,
       planName: k.planName || null,
       status: 'active',
-      currentPeriodEnd: billingHtml.ok ? parseAerolinkRenewal(billingHtml.body) : null,
+      currentPeriodEnd: renewal,
       cancelAtPeriodEnd: false,
       renewalType: null,
       credits: Number(user.bonusCents) || 0,

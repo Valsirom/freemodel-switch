@@ -62,7 +62,8 @@ function toPublic (a) {
     billing: a.billing || null,
     account: a.account || null,
     fetchedAt: a.fetchedAt || 0,
-    fetchError: a.fetchError || null
+    fetchError: a.fetchError || null,
+    windowsStale: !!a.windowsStale
   }
 }
 
@@ -115,13 +116,14 @@ function remove (id) {
 
 // Cache the last fetched usage/billing so the UI shows data instantly on
 // launch before a refresh completes.
-function setData (id, { usage, billing, account, fetchError }) {
+function setData (id, { usage, billing, account, fetchError, windowsStale }) {
   const accounts = load()
   const a = accounts.find(x => x.id === id)
   if (!a) return
   if (usage !== undefined) a.usage = usage
   if (billing !== undefined) a.billing = billing
   if (account !== undefined) a.account = account
+  if (windowsStale !== undefined) a.windowsStale = windowsStale
   a.fetchError = fetchError || null
   a.fetchedAt = Date.now()
   persist(accounts)

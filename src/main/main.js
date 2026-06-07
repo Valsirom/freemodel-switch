@@ -88,7 +88,7 @@ async function refreshOne (id) {
     if (!res.loggedIn) {
       store.setData(id, { fetchError: 'not-logged-in' })
     } else {
-      store.setData(id, { usage: res.usage, billing: res.billing, account: res.account })
+      store.setData(id, { usage: res.usage, billing: res.billing, account: res.account, windowsStale: !!res.windowsStale })
     }
   } catch (err) {
     store.setData(id, { fetchError: err.message })
