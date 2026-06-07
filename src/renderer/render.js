@@ -85,7 +85,8 @@ function esc (s) {
 function usageBar (label, w) {
   const p = pct(w.usedCents, w.limitCents)
   const limitStr = w.limitCents > 0 ? fmtCents(w.limitCents) : '∞'
-  const resets = fmtResets(w.resetsAt)
+  // aerolink provides a scraped "Resets in 3h 18m" text; freemodel a unix ts.
+  const resets = w.resetsText ? 'сброс через ' + w.resetsText : fmtResets(w.resetsAt)
   return `
     <div class="bar-row">
       <div class="bar-label">

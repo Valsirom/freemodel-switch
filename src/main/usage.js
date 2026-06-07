@@ -122,14 +122,22 @@ function normalizeFreemodelBilling (d) {
 // The 5h/weekly windows aren't exposed via JSON — they're server-rendered into
 // the /dashboard/usage page. These are rate-limit counters (the weekly window's
 // "used" is NOT the same as weekly $ spend), so they can't be derived from logs;
-// we scrape them from the page. Markup splits "$" and the number with React
-// comment nodes, so we strip <!-- --> and tags first. Literal regexes only —
-// a RegExp built from a string variable mysteriously fails to match here.
+// we scrape them. Strip <!-- --> and tags first. We anchor on each window's
+// label, then read the "$used / $limit" and "Resets in <…>" that follow it —
+// order-independent, so a reshuffle of the %/label/amount order won't break it.
 function parseAerolinkWindows (html) {
   const text = String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
-  const toWin = (m) => m ? { usedCents: Math.round(+m[2] * 100), limitCents: Math.round(+m[3] * 100), resetsAt: 0 } : null
-  const window5h = toWin(text.match(/5-hour window[^%]*?([0-9]+)%[^$]*?\$([0-9.]+)\s*\/\s*\$([0-9.]+)/))
-  const windowWeek = toWin(text.match(/Weekly window[^%]*?([0-9]+)%[^$]*?\$([0-9.]+)\s*\/\s*\$([0-9.]+)/))
+  const grab = (label) => {
+    const i = text.indexOf(label)
+    if (i < 0) return null
+    const seg = text.slice(i, i + 200)
+    const am = seg.match(/\$([0-9.]+)\s*\/\s*\$([0-9.]+)/)
+    if (!am) return null
+    const rs = seg.match(/Resets? in ([0-9]+[dhm](?:\s*[0-9]+[dhm])*)/i)
+    return { usedCents: Math.round(+am[1] * 100), limitCents: Math.round(+am[2] * 100), resetsAt: 0, resetsText: rs ? rs[1].trim() : '' }
+  }
+  const window5h = grab('5-hour window')
+  const windowWeek = grab('Weekly window')
   const reqM = text.match(/([0-9][0-9.,]*)\s*Requests\s*·?\s*weekly/i)
   const totalRequests = reqM ? Number(String(reqM[1]).replace(/,/g, '')) || 0 : 0
   if (!window5h && !windowWeek) return null
