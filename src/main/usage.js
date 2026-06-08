@@ -167,9 +167,12 @@ function parseAerolinkBalance (html) {
   return isNaN(cents) ? null : cents
 }
 
-const MONTHS = {
-  january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
-  july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
+// Month name -> "MM", accepting full ("July") and abbreviated ("Jun") forms.
+function monthNum (name) {
+  const k = String(name || '').toLowerCase().slice(0, 3)
+  const order = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+  const idx = order.indexOf(k)
+  return idx < 0 ? null : String(idx + 1).padStart(2, '0')
 }
 
 // The plan renewal date ("Renews July 6, 2026") is server-rendered into the
@@ -179,10 +182,30 @@ function parseAerolinkRenewal (html) {
   const text = stripHtml(html)
   const m = text.match(/Renews?\s+([A-Za-z]+)\s+([0-9]{1,2}),?\s+([0-9]{4})/i)
   if (!m) return null
-  const mm = MONTHS[m[1].toLowerCase()]
+  const mm = monthNum(m[1])
   if (!mm) return null
   const dd = String(m[2]).padStart(2, '0')
   return m[3] + '-' + mm + '-' + dd + 'T00:00:00.000Z'
+}
+
+// The bonus/trial expiry ("Bonus · exp. Jun 11") is on the usage page WITHOUT a
+// year. get-session's starterExpiresAt is stale (observed lagging the page), so
+// prefer this. Infer the year: current year, bumped to next if already past.
+function parseAerolinkBonusExp (html) {
+  const text = stripHtml(html)
+  const m = text.match(/Bonus[^A-Za-z]*exp\.?\s*([A-Za-z]+)\s+([0-9]{1,2})/i)
+  if (!m) return null
+  const mm = monthNum(m[1])
+  if (!mm) return null
+  const dd = String(m[2]).padStart(2, '0')
+  const now = new Date()
+  let year = now.getUTCFullYear()
+  let iso = year + '-' + mm + '-' + dd + 'T00:00:00.000Z'
+  // If that date is well in the past, the expiry must be next year.
+  if (new Date(iso).getTime() < now.getTime() - 2 * 86400000) {
+    iso = (year + 1) + '-' + mm + '-' + dd + 'T00:00:00.000Z'
+  }
+  return iso
 }
 
 async function fetchAerolink (partition, p) {
@@ -205,6 +228,9 @@ async function fetchAerolink (partition, p) {
   // whose bonus is spent but still has a top-up balance). Fall back to bonusCents.
   const scrapedBalance = usageHtml.ok ? parseAerolinkBalance(usageHtml.body) : null
   const credits = scrapedBalance != null ? scrapedBalance : (Number(user.bonusCents) || 0)
+  // Prefer the page's bonus expiry over get-session's starterExpiresAt, which
+  // has been observed lagging behind the live dashboard.
+  const trialExpiresAt = (usageHtml.ok && parseAerolinkBonusExp(usageHtml.body)) || user.starterExpiresAt || null
   // The usage page loaded (HTTP 200) but we couldn't find the windows in it —
   // a strong signal aerolink changed the markup and the scraper needs updating.
   const windowsStale = usageHtml.ok && !usage
@@ -221,7 +247,7 @@ async function fetchAerolink (partition, p) {
       cancelAtPeriodEnd: false,
       renewalType: null,
       credits,
-      trialExpiresAt: user.starterExpiresAt || null,
+      trialExpiresAt,
       todaySpendCents: todaySpend,
       apiKeyLimit: Number(k.apiKeyLimit) || 0,
       activeApiKeys: Number(k.activeApiKeys) || 0
