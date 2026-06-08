@@ -119,22 +119,31 @@ function normalizeFreemodelBilling (d) {
 // No 5h/week windows — it's a pay-from-balance model. user.bonusCents is the
 // balance, user.starterExpiresAt the trial expiry, /api/keys has plan + spend.
 
+// Strip React comment separators + tags, collapse whitespace, for scraping.
+function stripHtml (html) {
+  return String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+}
+
 // The 5h/weekly windows aren't exposed via JSON — they're server-rendered into
 // the /dashboard/usage page. These are rate-limit counters (the weekly window's
 // "used" is NOT the same as weekly $ spend), so they can't be derived from logs;
-// we scrape them. Strip <!-- --> and tags first. We anchor on each window's
-// label, then read the "$used / $limit" and "Resets in <…>" that follow it —
-// order-independent, so a reshuffle of the %/label/amount order won't break it.
+// we scrape them. The label appears more than once (RSC flight data + the real
+// DOM node), so we scan ALL occurrences and take the first one that actually has
+// "$used / $limit" next to it — order/duplication resilient.
 function parseAerolinkWindows (html) {
-  const text = String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+  const text = stripHtml(html)
   const grab = (label) => {
-    const i = text.indexOf(label)
-    if (i < 0) return null
-    const seg = text.slice(i, i + 200)
-    const am = seg.match(/\$([0-9.]+)\s*\/\s*\$([0-9.]+)/)
-    if (!am) return null
-    const rs = seg.match(/Resets? in ([0-9]+[dhm](?:\s*[0-9]+[dhm])*)/i)
-    return { usedCents: Math.round(+am[1] * 100), limitCents: Math.round(+am[2] * 100), resetsAt: 0, resetsText: rs ? rs[1].trim() : '' }
+    let from = 0, i
+    while ((i = text.indexOf(label, from)) >= 0) {
+      const seg = text.slice(i, i + 200)
+      const am = seg.match(/\$([0-9.]+)\s*\/\s*\$([0-9.]+)/)
+      if (am) {
+        const rs = seg.match(/Resets? in ([0-9]+[dhm](?:\s*[0-9]+[dhm])*)/i)
+        return { usedCents: Math.round(+am[1] * 100), limitCents: Math.round(+am[2] * 100), resetsAt: 0, resetsText: rs ? rs[1].trim() : '' }
+      }
+      from = i + label.length
+    }
+    return null
   }
   const window5h = grab('5-hour window')
   const windowWeek = grab('Weekly window')
@@ -142,6 +151,20 @@ function parseAerolinkWindows (html) {
   const totalRequests = reqM ? Number(String(reqM[1]).replace(/,/g, '')) || 0 : 0
   if (!window5h && !windowWeek) return null
   return { totalRequests, totalTokens: 0, window5h: window5h || win(), windowWeek: windowWeek || win() }
+}
+
+// Total balance ("$9.69 Total balance") is rendered with the amount BEFORE the
+// label. This is the real available amount (bonus + paid); get-session's
+// bonusCents misses the paid portion. Returns cents, or null. */
+function parseAerolinkBalance (html) {
+  const text = stripHtml(html)
+  const i = text.indexOf('Total balance')
+  if (i < 0) return null
+  const before = text.slice(Math.max(0, i - 40), i)
+  const m = before.match(/\$([0-9][0-9.,]*)\s*$/)
+  if (!m) return null
+  const cents = Math.round(parseFloat(m[1].replace(/,/g, '')) * 100)
+  return isNaN(cents) ? null : cents
 }
 
 const MONTHS = {
@@ -153,7 +176,7 @@ const MONTHS = {
 // /dashboard/billing page. Parse "Month D, YYYY" into an ISO string (midnight
 // UTC) so the card can show days remaining. Returns ISO string or null.
 function parseAerolinkRenewal (html) {
-  const text = String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+  const text = stripHtml(html)
   const m = text.match(/Renews?\s+([A-Za-z]+)\s+([0-9]{1,2}),?\s+([0-9]{4})/i)
   if (!m) return null
   const mm = MONTHS[m[1].toLowerCase()]
@@ -177,9 +200,13 @@ async function fetchAerolink (partition, p) {
     : 0
   const usage = usageHtml.ok ? parseAerolinkWindows(usageHtml.body) : null
   const renewal = billingHtml.ok ? parseAerolinkRenewal(billingHtml.body) : null
+  // Real available balance = "Total balance" scraped from the page (bonus +
+  // paid). get-session's bonusCents misses the paid portion (e.g. an account
+  // whose bonus is spent but still has a top-up balance). Fall back to bonusCents.
+  const scrapedBalance = usageHtml.ok ? parseAerolinkBalance(usageHtml.body) : null
+  const credits = scrapedBalance != null ? scrapedBalance : (Number(user.bonusCents) || 0)
   // The usage page loaded (HTTP 200) but we couldn't find the windows in it —
   // a strong signal aerolink changed the markup and the scraper needs updating.
-  // Surface it so the card shows a clear note instead of silently empty bars.
   const windowsStale = usageHtml.ok && !usage
   return {
     loggedIn: true,
@@ -193,7 +220,7 @@ async function fetchAerolink (partition, p) {
       currentPeriodEnd: renewal,
       cancelAtPeriodEnd: false,
       renewalType: null,
-      credits: Number(user.bonusCents) || 0,
+      credits,
       trialExpiresAt: user.starterExpiresAt || null,
       todaySpendCents: todaySpend,
       apiKeyLimit: Number(k.apiKeyLimit) || 0,

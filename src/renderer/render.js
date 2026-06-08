@@ -134,7 +134,7 @@ function aerolinkBody (a) {
   const metaParts = []
   if (a.account && a.account.email) metaParts.push(`<span>${esc(a.account.email)}</span>`)
   if (a.usage && a.usage.totalRequests) metaParts.push(`<span><b>${a.usage.totalRequests}</b> запросов/нед</span>`)
-  if (b && b.credits) metaParts.push(`<span>баланс: <b>${fmtCents(b.credits)}</b></span>`)
+  if (b && b.credits != null) metaParts.push(`<span>баланс: <b>${fmtCents(b.credits)}</b></span>`)
   if (b && b.todaySpendCents != null) metaParts.push(`<span>сегодня: <b>${fmtCents(b.todaySpendCents)}</b></span>`)
   if (b && b.apiKeyLimit) metaParts.push(`<span>ключи: <b>${b.activeApiKeys}/${b.apiKeyLimit}</b></span>`)
   const exp = fmtExpiry(b)
