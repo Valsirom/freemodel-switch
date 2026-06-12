@@ -1,5 +1,6 @@
 'use strict'
 const path = require('path')
+const fs = require('fs')
 const { app, BrowserWindow, ipcMain } = require('electron')
 const settings = require('./settings')
 const store = require('./store')
@@ -168,7 +169,54 @@ ipcMain.handle('accounts:refreshAll', async () => {
   return withActiveFlag(store.listPublic())
 })
 
-app.whenReady().then(() => {
+// External tools (e.g. aerolink autoreger) can write accounts.json with a
+// `pendingCookie` field per account — instead of asking the user to paste the
+// cookie through the Import Session dialog. On startup we sweep these, import
+// each cookie into the account's partition, then strip the field so the file
+// stays clean and we never re-import the same cookie twice.
+async function importPendingCookies () {
+  let raw
+  try {
+    raw = fs.readFileSync(store.storePath(), 'utf8')
+  } catch {
+    return
+  }
+  let data
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return
+  }
+  if (!data || !Array.isArray(data.accounts)) return
+
+  let dirty = false
+  for (const a of data.accounts) {
+    if (!a.pendingCookie) continue
+    try {
+      await importSession(a.partition, a.pendingCookie, a.provider || 'freemodel')
+      delete a.pendingCookie
+      delete a.pendingCookieDomain
+      delete a.pendingCookieName
+      dirty = true
+      console.log('[switcher] imported pendingCookie for', a.label || a.id)
+    } catch (err) {
+      console.error('[switcher] failed to import pendingCookie for',
+                    a.label || a.id, err && err.message)
+    }
+  }
+  if (dirty) {
+    try {
+      const tmp = store.storePath() + '.tmp'
+      fs.writeFileSync(tmp, JSON.stringify({ accounts: data.accounts }, null, 2), 'utf8')
+      fs.renameSync(tmp, store.storePath())
+    } catch (err) {
+      console.error('[switcher] failed to persist after pendingCookie import:', err.message)
+    }
+  }
+}
+
+app.whenReady().then(async () => {
+  await importPendingCookies()
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
