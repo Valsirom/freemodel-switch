@@ -100,7 +100,9 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
   box-shadow: 0 0 0 1px var(--accent-2) inset;
 }
 
-.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.card-head > div:first-child { flex: 1 1 200px; min-width: 0; }
+.card-head > div:last-child { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
 .card-title { font-weight: 600; font-size: 15px; }
 .card-sub { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
 
@@ -113,6 +115,27 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
 }
 .badge.active { background: rgba(79,140,255,.15); border-color: var(--accent-2); color: var(--accent); }
 .badge.plan { background: var(--panel-2); }
+.badge.proxy { background: rgba(120, 200, 120, .12); border-color: rgba(120, 200, 120, .35); color: var(--green, #6cc66c); font-family: monospace; }
+
+.proxy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.proxy-toggle input { margin: 0; cursor: pointer; }
+.proxy-toggle:has(input:checked) {
+  background: rgba(120, 200, 120, .12);
+  border-color: rgba(120, 200, 120, .35);
+  color: var(--green, #6cc66c);
+}
 
 .bars { display: flex; flex-direction: column; gap: 10px; }
 .bar-row { display: flex; flex-direction: column; gap: 4px; }

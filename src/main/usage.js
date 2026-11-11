@@ -1,34 +1,92 @@
 'use strict'
-const { session, net } = require('electron')
+const { app, session, net } = require('electron')
+const fs = require('fs')
+const path = require('path')
 const providers = require('./providers')
+
+// Per-account on-disk cache of aerolink request logs. /api/usage only returns
+// the last 50 logs and ignores all pagination params (limit/offset/cursor/page),
+// so a single fetch loses anything older. We merge new logs into the cache by
+// id (idempotent), then compute the 5h window over the union. Pruned to 8 days
+// so the cache stays bounded.
+function aerolinkCacheDir () {
+  try { return path.join(app.getPath('userData'), 'aerolink-cache') } catch { return null }
+}
+function aerolinkCachePath (partition) {
+  const dir = aerolinkCacheDir()
+  if (!dir) return null
+  const safe = String(partition).replace(/[^A-Za-z0-9_-]/g, '_')
+  return path.join(dir, safe + '.json')
+}
+function loadAerolinkCache (partition) {
+  const p = aerolinkCachePath(partition)
+  if (!p) return { logs: {} }
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')) || { logs: {} } } catch { return { logs: {} } }
+}
+function saveAerolinkCache (partition, cache) {
+  const p = aerolinkCachePath(partition)
+  if (!p) return
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, JSON.stringify(cache))
+  } catch { /* best effort */ }
+}
+function mergeAerolinkLogs (cache, newLogs, nowMs) {
+  if (!cache.logs) cache.logs = {}
+  const cutoff = (Number(nowMs) || Date.now()) - 8 * 24 * 60 * 60 * 1000
+  if (Array.isArray(newLogs)) {
+    for (const l of newLogs) {
+      if (l && l.id) cache.logs[l.id] = l
+    }
+  }
+  for (const id of Object.keys(cache.logs)) {
+    const t = Date.parse(cache.logs[id] && cache.logs[id].createdAt)
+    if (isNaN(t) || t < cutoff) delete cache.logs[id]
+  }
+  return cache
+}
 
 // Kept for backward compat (login.js historically imported it). Prefer the
 // per-provider dashOrigin from providers.js.
 const DASH_ORIGIN = providers.PROVIDERS.freemodel.dashOrigin
 
 // Fetch a dashboard JSON endpoint using the cookies stored in the account's
-// own persistent session partition. Returns { ok, status, data }.
+// own persistent session partition. Returns { ok, status, data }. Never throws
+// — proxy CONNECT failures (ERR_TUNNEL_CONNECTION_FAILED), aborts, and parse
+// errors all resolve to { ok: false }.
 function fetchJson (partition, origin, pathname) {
   return new Promise((resolve) => {
-    const ses = session.fromPartition(partition)
-    const request = net.request({
-      method: 'GET',
-      url: origin + pathname,
-      session: ses,
-      useSessionCookies: true
-    })
-    request.setHeader('Accept', 'application/json')
-    let body = ''
-    request.on('response', (response) => {
-      response.on('data', (chunk) => { body += chunk.toString() })
-      response.on('end', () => {
-        let data = null
-        try { data = JSON.parse(body) } catch { /* HTML fallback = not logged in */ }
-        resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, data })
+    let settled = false
+    const done = (val) => { if (!settled) { settled = true; resolve(val) } }
+    let request
+    try {
+      const ses = session.fromPartition(partition)
+      request = net.request({
+        method: 'GET',
+        url: origin + pathname,
+        session: ses,
+        useSessionCookies: true
       })
-    })
-    request.on('error', (err) => resolve({ ok: false, status: 0, data: null, error: err.message }))
-    request.end()
+      // Wire error/abort handlers BEFORE anything else can fire, so a synchronous
+      // SimpleURLLoaderWrapper error (dead residential upstream) is caught and
+      // never bubbles up as an uncaught exception.
+      request.on('error', (err) => done({ ok: false, status: 0, data: null, error: err && err.message }))
+      request.on('abort', () => done({ ok: false, status: 0, data: null, error: 'aborted' }))
+      request.setHeader('Accept', 'application/json')
+      let body = ''
+      request.on('response', (response) => {
+        response.on('error', () => done({ ok: false, status: 0, data: null, error: 'response-error' }))
+        response.on('data', (chunk) => { body += chunk.toString() })
+        response.on('end', () => {
+          let data = null
+          try { data = JSON.parse(body) } catch { /* HTML fallback = not logged in */ }
+          done({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, data })
+        })
+      })
+      request.end()
+    } catch (err) {
+      done({ ok: false, status: 0, data: null, error: err && err.message })
+    }
   })
 }
 
@@ -36,16 +94,25 @@ function fetchJson (partition, origin, pathname) {
 // HTML rather than exposed via a JSON endpoint). Returns { ok, status, body }.
 function fetchText (partition, origin, pathname) {
   return new Promise((resolve) => {
-    const ses = session.fromPartition(partition)
-    const request = net.request({ method: 'GET', url: origin + pathname, session: ses, useSessionCookies: true })
-    request.setHeader('Accept', 'text/html')
-    let body = ''
-    request.on('response', (response) => {
-      response.on('data', (c) => { body += c.toString() })
-      response.on('end', () => resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, body }))
-    })
-    request.on('error', () => resolve({ ok: false, status: 0, body: '' }))
-    request.end()
+    let settled = false
+    const done = (val) => { if (!settled) { settled = true; resolve(val) } }
+    let request
+    try {
+      const ses = session.fromPartition(partition)
+      request = net.request({ method: 'GET', url: origin + pathname, session: ses, useSessionCookies: true })
+      request.on('error', () => done({ ok: false, status: 0, body: '' }))
+      request.on('abort', () => done({ ok: false, status: 0, body: '' }))
+      request.setHeader('Accept', 'text/html')
+      let body = ''
+      request.on('response', (response) => {
+        response.on('error', () => done({ ok: false, status: 0, body: '' }))
+        response.on('data', (c) => { body += c.toString() })
+        response.on('end', () => done({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, body }))
+      })
+      request.end()
+    } catch {
+      done({ ok: false, status: 0, body: '' })
+    }
   })
 }
 
@@ -56,6 +123,7 @@ const loggedOut = { loggedIn: false, account: null, usage: null, billing: null }
 // renderer can stay mostly provider-agnostic.
 async function fetchAll (partition, providerId) {
   const p = providers.get(providerId)
+  if (p.api === 'coarena') return fetchCoarena(partition, p)
   if (p.api === 'aerolink') return fetchAerolink(partition, p)
   return fetchFreemodel(partition, p)
 }
@@ -119,121 +187,105 @@ function normalizeFreemodelBilling (d) {
 // No 5h/week windows — it's a pay-from-balance model. user.bonusCents is the
 // balance, user.starterExpiresAt the trial expiry, /api/keys has plan + spend.
 
-// Strip React comment separators + tags, collapse whitespace, for scraping.
-function stripHtml (html) {
-  return String(html || '').replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
-}
-
-// The 5h/weekly windows aren't exposed via JSON — they're server-rendered into
-// the /dashboard/usage page. These are rate-limit counters (the weekly window's
-// "used" is NOT the same as weekly $ spend), so they can't be derived from logs;
-// we scrape them. The label appears more than once (RSC flight data + the real
-// DOM node), so we scan ALL occurrences and take the first one that actually has
-// "$used / $limit" next to it — order/duplication resilient.
-function parseAerolinkWindows (html) {
-  const text = stripHtml(html)
-  const grab = (label) => {
-    let from = 0, i
-    while ((i = text.indexOf(label, from)) >= 0) {
-      const seg = text.slice(i, i + 200)
-      const am = seg.match(/\$([0-9.]+)\s*\/\s*\$([0-9.]+)/)
-      if (am) {
-        const rs = seg.match(/Resets? in ([0-9]+[dhm](?:\s*[0-9]+[dhm])*)/i)
-        return { usedCents: Math.round(+am[1] * 100), limitCents: Math.round(+am[2] * 100), resetsAt: 0, resetsText: rs ? rs[1].trim() : '' }
-      }
-      from = i + label.length
-    }
-    return null
+// Rolling 5h and 7-day spend computed from the per-request log stream that
+// aerolink exposes at /api/usage (JSON, not behind Cloudflare). Sum each log's
+// `totalCostCents` whose `createdAt` falls in the rolling window ending now.
+// Limits come from a per-plan lookup (we don't get them in JSON either).
+function parseAerolinkWindowsFromLogs (logs, planName, nowMs) {
+  if (!Array.isArray(logs)) return null
+  const now = Number(nowMs) || Date.now()
+  const FIVE_H = 5 * 60 * 60 * 1000
+  const WEEK = 7 * 24 * 60 * 60 * 1000
+  let fiveCents = 0
+  let weekCents = 0
+  let totalReqWeek = 0
+  for (const l of logs) {
+    const t = Date.parse(l && l.createdAt)
+    if (isNaN(t)) continue
+    const age = now - t
+    if (age < 0) continue
+    const cents = Number(l.totalCostCents) || 0
+    if (age <= FIVE_H) fiveCents += cents
+    if (age <= WEEK) { weekCents += cents; totalReqWeek += 1 }
   }
-  const window5h = grab('5-hour window')
-  const windowWeek = grab('Weekly window')
-  const reqM = text.match(/([0-9][0-9.,]*)\s*Requests\s*·?\s*weekly/i)
-  const totalRequests = reqM ? Number(String(reqM[1]).replace(/,/g, '')) || 0 : 0
-  if (!window5h && !windowWeek) return null
-  return { totalRequests, totalTokens: 0, window5h: window5h || win(), windowWeek: windowWeek || win() }
-}
-
-// Total balance ("$9.69 Total balance") is rendered with the amount BEFORE the
-// label. This is the real available amount (bonus + paid); get-session's
-// bonusCents misses the paid portion. Returns cents, or null. */
-function parseAerolinkBalance (html) {
-  const text = stripHtml(html)
-  const i = text.indexOf('Total balance')
-  if (i < 0) return null
-  const before = text.slice(Math.max(0, i - 40), i)
-  const m = before.match(/\$([0-9][0-9.,]*)\s*$/)
-  if (!m) return null
-  const cents = Math.round(parseFloat(m[1].replace(/,/g, '')) * 100)
-  return isNaN(cents) ? null : cents
-}
-
-// Month name -> "MM", accepting full ("July") and abbreviated ("Jun") forms.
-function monthNum (name) {
-  const k = String(name || '').toLowerCase().slice(0, 3)
-  const order = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-  const idx = order.indexOf(k)
-  return idx < 0 ? null : String(idx + 1).padStart(2, '0')
-}
-
-// The plan renewal date ("Renews July 6, 2026") is server-rendered into the
-// /dashboard/billing page. Parse "Month D, YYYY" into an ISO string (midnight
-// UTC) so the card can show days remaining. Returns ISO string or null.
-function parseAerolinkRenewal (html) {
-  const text = stripHtml(html)
-  const m = text.match(/Renews?\s+([A-Za-z]+)\s+([0-9]{1,2}),?\s+([0-9]{4})/i)
-  if (!m) return null
-  const mm = monthNum(m[1])
-  if (!mm) return null
-  const dd = String(m[2]).padStart(2, '0')
-  return m[3] + '-' + mm + '-' + dd + 'T00:00:00.000Z'
-}
-
-// The bonus/trial expiry ("Bonus · exp. Jun 11") is on the usage page WITHOUT a
-// year. get-session's starterExpiresAt is stale (observed lagging the page), so
-// prefer this. Infer the year: current year, bumped to next if already past.
-function parseAerolinkBonusExp (html) {
-  const text = stripHtml(html)
-  const m = text.match(/Bonus[^A-Za-z]*exp\.?\s*([A-Za-z]+)\s+([0-9]{1,2})/i)
-  if (!m) return null
-  const mm = monthNum(m[1])
-  if (!mm) return null
-  const dd = String(m[2]).padStart(2, '0')
-  const now = new Date()
-  let year = now.getUTCFullYear()
-  let iso = year + '-' + mm + '-' + dd + 'T00:00:00.000Z'
-  // If that date is well in the past, the expiry must be next year.
-  if (new Date(iso).getTime() < now.getTime() - 2 * 86400000) {
-    iso = (year + 1) + '-' + mm + '-' + dd + 'T00:00:00.000Z'
+  const limits = aerolinkPlanLimits(planName)
+  return {
+    totalRequests: totalReqWeek,
+    totalTokens: 0,
+    window5h: { usedCents: fiveCents, limitCents: limits.fiveCents, resetsAt: 0, resetsText: '' },
+    windowWeek: { usedCents: weekCents, limitCents: limits.weekCents, resetsAt: 0, resetsText: '' }
   }
-  return iso
+}
+
+// Plan -> rate-limit caps in cents. Filled in once LO confirms the real values
+// shown on the aerolink dashboard for each plan. Zero means "limit unknown" —
+// the renderer can show a bar with no fill % rather than fake a number.
+function aerolinkPlanLimits (planName) {
+  const k = String(planName || '').toLowerCase()
+  if (k.indexOf('max20') >= 0 || k.indexOf('max 20') >= 0) return { fiveCents: 8000, weekCents: 80000 }
+  if (k.indexOf('max5') >= 0 || k.indexOf('max 5') >= 0) return { fiveCents: 4000, weekCents: 40000 }
+  if (k.indexOf('pro') >= 0) return { fiveCents: 800, weekCents: 20000 }
+  if (k.indexOf('starter') >= 0) return { fiveCents: 1000, weekCents: 7000 }
+  return { fiveCents: 0, weekCents: 0 }
 }
 
 async function fetchAerolink (partition, p) {
   const sess = await fetchJson(partition, p.dashOrigin, '/api/auth/get-session')
   const user = sess.data && sess.data.user
-  if (sess.status === 401 || !user || !user.email) return loggedOut
-  const [keys, usageHtml, billingHtml] = await Promise.all([
+  if (sess.status === 401 || !user || !user.email) {
+    // Diagnostics: dump what aerolink actually returned so we can tell apart
+    // "401 — cookie didn't reach server" from "200 empty session" from
+    // "Cloudflare interstitial HTML". Logged once per refresh per partition.
+    try {
+      const dir = path.join(app.getPath('userData'), 'diag')
+      fs.mkdirSync(dir, { recursive: true })
+      const safe = String(partition).replace(/[^A-Za-z0-9_-]/g, '_')
+      const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        partition,
+        status: sess.status,
+        err: sess.error || null,
+        hasData: !!sess.data,
+        userEmail: user && user.email,
+        bodyPreview: typeof sess.data === 'string' ? sess.data.slice(0, 400) : JSON.stringify(sess.data || {}).slice(0, 400)
+      }) + '\n'
+      fs.appendFileSync(path.join(dir, safe + '.log'), line)
+    } catch { /* best effort */ }
+    return loggedOut
+  }
+  // All three endpoints are JSON and unaffected by Cloudflare's challenge
+  // (only the SSR'd /dashboard/* HTML pages are gated). /api/usage returns
+  // {logs: [{totalCostCents, createdAt, ...}, ...]} — we derive the 5h and
+  // weekly rolling windows ourselves.
+  const [keys, usageLogs] = await Promise.all([
     fetchJson(partition, p.dashOrigin, '/api/keys'),
-    fetchText(partition, p.dashOrigin, '/dashboard/usage'),
-    fetchText(partition, p.dashOrigin, '/dashboard/billing')
+    fetchJson(partition, p.dashOrigin, '/api/usage')
   ])
   const k = (keys.ok && keys.data) || {}
   const todaySpend = Array.isArray(k.keys)
     ? k.keys.reduce((s, x) => s + (Number(x.todaySpendCents) || 0), 0)
     : 0
-  const usage = usageHtml.ok ? parseAerolinkWindows(usageHtml.body) : null
-  const renewal = billingHtml.ok ? parseAerolinkRenewal(billingHtml.body) : null
-  // Real available balance = "Total balance" scraped from the page (bonus +
-  // paid). get-session's bonusCents misses the paid portion (e.g. an account
-  // whose bonus is spent but still has a top-up balance). Fall back to bonusCents.
-  const scrapedBalance = usageHtml.ok ? parseAerolinkBalance(usageHtml.body) : null
-  const credits = scrapedBalance != null ? scrapedBalance : (Number(user.bonusCents) || 0)
-  // Prefer the page's bonus expiry over get-session's starterExpiresAt, which
-  // has been observed lagging behind the live dashboard.
-  const trialExpiresAt = (usageHtml.ok && parseAerolinkBonusExp(usageHtml.body)) || user.starterExpiresAt || null
-  // The usage page loaded (HTTP 200) but we couldn't find the windows in it —
-  // a strong signal aerolink changed the markup and the scraper needs updating.
-  const windowsStale = usageHtml.ok && !usage
+  const freshLogs = (usageLogs.ok && usageLogs.data && Array.isArray(usageLogs.data.logs))
+    ? usageLogs.data.logs
+    : null
+  // Always read+merge+write the cache, even if this fetch returned nothing —
+  // the cache holds prior history we still need for the windows.
+  const cache = loadAerolinkCache(partition)
+  if (freshLogs) {
+    mergeAerolinkLogs(cache, freshLogs)
+    saveAerolinkCache(partition, cache)
+  }
+  const allLogs = Object.values(cache.logs || {})
+  const usage = allLogs.length ? parseAerolinkWindowsFromLogs(allLogs, k.planName) : null
+  const renewal = null
+  // get-session.bonusCents misses any paid top-up portion, but it's the only
+  // value we can get without scraping the dashboard. Good enough until LO
+  // tops up a card and we see the gap.
+  const credits = Number(user.bonusCents) || 0
+  const trialExpiresAt = user.starterExpiresAt || null
+  // /api/usage returned ok but no usable logs ever accumulated — schema may
+  // have changed, surface it to the UI.
+  const windowsStale = usageLogs.ok && !allLogs.length
   return {
     loggedIn: true,
     account: { name: user.name || '', email: user.email || '' },
@@ -255,4 +307,34 @@ async function fetchAerolink (partition, p) {
   }
 }
 
-module.exports = { fetchAll, DASH_ORIGIN }
+// ---- coarena: /api/me/model-api/usage — single JSON with today's spend vs the
+// $5/day cap, reset time (unix ms), per-model stats. Pay-nothing model: no
+// balance/subscription, so billing stays null.
+async function fetchCoarena (partition, p) {
+  const r = await fetchJson(partition, p.dashOrigin, '/api/me/model-api/usage?range=7d')
+  const d = r.data
+  if (r.status === 401 || r.status === 403 || !r.ok || !d || !d.today) return loggedOut
+  const t = d.today
+  const limitUsd = Number(d.limits && d.limits.usd_per_day) || Number(d.default_usd_per_day) || 0
+  const models = Array.isArray(d.models) ? d.models.slice().sort((a, b) => (b.spent_usd || 0) - (a.spent_usd || 0)) : []
+  return {
+    loggedIn: true,
+    account: { name: '', email: d.email_masked || '' },
+    usage: {
+      totalRequests: Number(t.requests) || 0,
+      totalTokens: (Number(t.input_tokens) || 0) + (Number(t.output_tokens) || 0),
+      inputTokens: Number(t.input_tokens) || 0,
+      outputTokens: Number(t.output_tokens) || 0,
+      rpm: Number(d.limits && d.limits.requests_per_minute && d.limits.requests_per_minute.key) || 0,
+      topModel: models[0] ? models[0].name : null,
+      windowDay: {
+        usedCents: Math.round((Number(t.spent_usd) || 0) * 100),
+        limitCents: Math.round(limitUsd * 100),
+        resetsAt: Math.round((Number(t.resets_at) || 0) / 1000)
+      }
+    },
+    billing: null
+  }
+}
+
+module.exports = { fetchAll, fetchJson, DASH_ORIGIN }

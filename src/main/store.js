@@ -32,25 +32,72 @@ function decrypt (field) {
   return field.v
 }
 
+function parseAccounts (file) {
+  const raw = fs.readFileSync(file, 'utf8')
+  const data = JSON.parse(raw)
+  if (!Array.isArray(data.accounts)) throw new Error('accounts is not an array')
+  return data.accounts
+}
+
+// A corrupted store must never look like "no accounts" — that used to make the
+// switcher silently show an empty list while the real data was still on disk.
+// Instead fall back to the rotated .bak, and if that is unusable too, move the
+// bad file aside and surface a hard error.
 function load () {
+  const file = storePath()
   try {
-    const raw = fs.readFileSync(storePath(), 'utf8')
-    const data = JSON.parse(raw)
-    return Array.isArray(data.accounts) ? data.accounts : []
+    return parseAccounts(file)
   } catch (err) {
     if (err.code === 'ENOENT') return []
-    throw err
+    const bak = file + '.bak'
+    try {
+      const accounts = parseAccounts(bak)
+      console.error('accounts.json unreadable (' + err.message + '); using ' + bak)
+      return accounts
+    } catch (bakErr) {
+      if (bakErr.code !== 'ENOENT') {
+        console.error('accounts.json.bak also unreadable: ' + bakErr.message)
+      }
+    }
+    const quarantine = file + '.corrupt-' + Date.now()
+    try { fs.renameSync(file, quarantine) } catch {}
+    throw new Error(
+      'accounts.json is corrupted (' + err.message + '). Moved to ' +
+      quarantine + '; no usable backup was found.'
+    )
   }
 }
 
+// writeFileSync + rename alone is not crash-safe on NTFS: the rename can commit
+// the new file size before the data reaches disk, leaving a full-length file of
+// NUL bytes after a hard shutdown. fsync the temp file (and keep a rotated .bak)
+// so a crash can cost at most the last write.
 function persist (accounts) {
-  const tmp = storePath() + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify({ accounts }, null, 2), 'utf8')
-  fs.renameSync(tmp, storePath())
+  const file = storePath()
+  const tmp = file + '.tmp'
+  const fd = fs.openSync(tmp, 'w')
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ accounts }, null, 2), 'utf8')
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+  // Only rotate a store we could actually read — otherwise a corrupted live
+  // file would overwrite the last good .bak and destroy the fallback.
+  try {
+    parseAccounts(file)
+    fs.copyFileSync(file, file + '.bak')
+  } catch {}
+  fs.renameSync(tmp, file)
 }
 
 // Public shape returned to the renderer never includes the raw token.
+// proxy is exposed in summary form (country/ip only) — host/port/username/
+// password stay server-side; only main.js needs them via proxyOf().
 function toPublic (a) {
+  const summary = a.proxy
+    ? { country: a.proxy.country || null, ip: a.proxy.ip || null }
+    : null
   return {
     id: a.id,
     label: a.label,
@@ -63,7 +110,8 @@ function toPublic (a) {
     account: a.account || null,
     fetchedAt: a.fetchedAt || 0,
     fetchError: a.fetchError || null,
-    windowsStale: !!a.windowsStale
+    windowsStale: !!a.windowsStale,
+    proxy: summary
   }
 }
 
@@ -74,6 +122,24 @@ function listPublic () {
 function tokenOf (id) {
   const a = load().find(x => x.id === id)
   return a ? decrypt(a.token) : null
+}
+
+// Full proxy record (host, port, username, password, country, ip) or null. Used
+// by main.js to configure the partition's setProxy() and to point the local
+// relay's upstream at the active account.
+function proxyOf (id) {
+  const a = load().find(x => x.id === id)
+  if (!a || !a.proxy) return null
+  const p = a.proxy
+  if (!p.host || !p.port) return null
+  return {
+    host: p.host,
+    port: Number(p.port) || 0,
+    username: p.username || '',
+    password: p.password || '',
+    country: p.country || null,
+    ip: p.ip || null
+  }
 }
 
 function tokenHint (token) {
@@ -130,5 +196,5 @@ function setData (id, { usage, billing, account, fetchError, windowsStale }) {
 }
 
 module.exports = {
-  listPublic, tokenOf, add, update, remove, setData, load, toPublic, storePath
+  listPublic, tokenOf, proxyOf, add, update, remove, setData, load, toPublic, storePath
 }

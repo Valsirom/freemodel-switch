@@ -48,4 +48,22 @@ function applyAccount (account) {
   return getActive()
 }
 
-module.exports = { readSettings, writeSettings, getActive, applyAccount, SETTINGS_PATH }
+// Write HTTPS_PROXY/HTTP_PROXY into the Claude Code env block so the CLI sends
+// all Anthropic traffic through the loopback relay. Null clears them. Other
+// env keys (statusLine, custom flags) are preserved.
+function applyHttpsProxy (url) {
+  const s = readSettings()
+  s.env = s.env || {}
+  if (url) {
+    s.env.HTTPS_PROXY = url
+    s.env.HTTP_PROXY = url
+  } else {
+    delete s.env.HTTPS_PROXY
+    delete s.env.HTTP_PROXY
+  }
+  writeSettings(s)
+}
+
+module.exports = {
+  readSettings, writeSettings, getActive, applyAccount, applyHttpsProxy, SETTINGS_PATH
+}

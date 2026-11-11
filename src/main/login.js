@@ -1,6 +1,7 @@
 'use strict'
 const { BrowserWindow, session } = require('electron')
 const providers = require('./providers')
+const { fetchJson } = require('./usage')
 
 // Open the provider's dashboard inside a BrowserWindow bound to this account's
 // persistent session partition. The user logs in themselves — we never handle
@@ -23,8 +24,15 @@ function openLogin (partition, parent, providerId) {
 
     const timer = setInterval(async () => {
       try {
-        const cookies = await ses.cookies.get({ url: p.dashOrigin })
-        const hasAuth = cookies.some(c => c.name === p.sessionCookie && c.value)
+        let hasAuth
+        if (p.sessionCookie) {
+          const cookies = await ses.cookies.get({ url: p.dashOrigin })
+          hasAuth = cookies.some(c => c.name === p.sessionCookie && c.value)
+        } else {
+          // No known cookie name: logged in once the usage API answers 200.
+          const r = await fetchJson(partition, p.dashOrigin, p.usageProbePath)
+          hasAuth = r.ok && !!r.data
+        }
         if (hasAuth) {
           clearInterval(timer)
           finish(true)
@@ -34,7 +42,7 @@ function openLogin (partition, parent, providerId) {
     }, 1200)
 
     win.on('closed', () => { clearInterval(timer); finish(false) })
-    win.loadURL(p.dashOrigin + '/dashboard')
+    win.loadURL(p.dashOrigin + (p.loginPath || '/dashboard'))
   })
 }
 
@@ -43,6 +51,7 @@ function openLogin (partition, parent, providerId) {
 // account's persistent partition.
 async function importSession (partition, cookieValue, providerId) {
   const p = providers.get(providerId)
+  if (!p.sessionCookie) throw new Error('Import by cookie is not supported for ' + p.label + ' yet — use "Войти"')
   const ses = session.fromPartition(partition)
   // expirationDate is REQUIRED for persistence: a cookie set without one is a
   // session cookie that Electron keeps only in memory and never writes to disk,

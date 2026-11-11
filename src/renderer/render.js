@@ -146,6 +146,24 @@ function aerolinkBody (a) {
   return `${bars ? `<div class="bars">${bars}</div>` : ''}${staleNote}<div class="meta">${metaParts.join('')}</div>`
 }
 
+// coarena card body: one daily-spend bar ($5/day free cap) + today's stats.
+function fmtTokens (n) {
+  return n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n)
+}
+function coarenaBody (a) {
+  const u = a.usage
+  if (!u || !u.windowDay) return '<p class="muted">Нет данных использования.</p>'
+  const w = u.windowDay
+  const metaParts = []
+  if (a.account && a.account.email) metaParts.push(`<span>${esc(a.account.email)}</span>`)
+  metaParts.push(`<span><b>${u.totalRequests}</b> запросов сегодня</span>`)
+  metaParts.push(`<span>токены: <b>${fmtTokens(u.inputTokens)}</b> → <b>${fmtTokens(u.outputTokens)}</b></span>`)
+  if (w.limitCents > 0) metaParts.push(`<span>осталось: <b>${fmtCents(Math.max(0, w.limitCents - w.usedCents))}</b></span>`)
+  if (u.topModel) metaParts.push(`<span>топ модель: <b>${esc(u.topModel)}</b></span>`)
+  if (u.rpm) metaParts.push(`<span>лимит: <b>${u.rpm}</b> запр/мин</span>`)
+  return `<div class="bars">${usageBar('Сегодня', w)}</div><div class="meta">${metaParts.join('')}</div>`
+}
+
 function cardHtml (a) {
   const loggedOut = a.fetchError === 'not-logged-in' || (!a.account && !a.usage && !a.billing)
   const planName = a.billing ? (a.billing.planName || planLabel(a.billing.planId)) : null
@@ -153,6 +171,8 @@ function cardHtml (a) {
   let body
   if (loggedOut) {
     body = `<p class="notice">Войди в дашборд (или импортируй сессию), чтобы видеть баланс и использование.</p>`
+  } else if (a.provider === 'coarena') {
+    body = coarenaBody(a)
   } else if (a.provider === 'aerolink') {
     body = aerolinkBody(a)
   } else {
@@ -161,6 +181,11 @@ function cardHtml (a) {
 
   const planBadge = planName ? `<span class="badge plan">${esc(planName)}</span>` : ''
   const activeBadge = a.active ? '<span class="badge active">активен</span>' : ''
+  // Residential proxy badge — only meaningful when the account actually has a
+  // proxy attached (autoreger exports one per aerolink account).
+  const proxyBadge = (a.proxy && (a.proxy.country || a.proxy.ip))
+    ? `<span class="badge proxy" title="Трафик этого акка идёт через ${esc(a.proxy.ip || '')}">via ${esc(a.proxy.country || '??')} ${esc(a.proxy.ip || '')}</span>`
+    : ''
 
   return `
   <div class="card ${a.active ? 'active' : ''}" data-id="${a.id}">
@@ -169,7 +194,7 @@ function cardHtml (a) {
         <div class="card-title">${esc(a.label)}</div>
         <div class="card-sub">${esc(a.tokenHint)} · ${esc(a.baseUrl)}</div>
       </div>
-      <div style="display:flex;gap:6px;align-items:center">${planBadge}${activeBadge}</div>
+      <div>${proxyBadge}${planBadge}${activeBadge}</div>
     </div>
     ${body}
     <div class="card-foot">

@@ -75,7 +75,18 @@ function renderTabs (accounts) {
 }
 
 async function render () {
-  const accounts = await window.api.listAccounts()
+  let accounts
+  try {
+    accounts = await window.api.listAccounts()
+  } catch (err) {
+    // A corrupted store now throws instead of reporting zero accounts — show
+    // that plainly, otherwise it looks like the accounts simply vanished.
+    cardsEl.innerHTML = ''
+    tabsEl.innerHTML = ''
+    emptyEl.innerHTML = `<p>Не удалось прочитать список аккаунтов.</p><p class="muted">${String(err && err.message || err)}</p>`
+    emptyEl.classList.remove('hidden')
+    return
+  }
   // Default tab on first paint: first provider that actually has accounts,
   // else the first provider in the registry.
   if (activeTab === null) {
@@ -236,6 +247,32 @@ tabsEl.addEventListener('click', (e) => {
 })
 
 // ---- top bar ----
+
+// Proxy toggle — single global switch wired to the relay + HTTPS_PROXY env.
+// Reads initial state from the main process, persists on change, then re-renders
+// so the via-country badge on cards appears/disappears.
+const proxyToggle = document.getElementById('proxy-toggle-input')
+async function syncProxyToggle () {
+  try {
+    const enabled = await window.api.getProxyEnabled()
+    proxyToggle.checked = !!enabled
+  } catch { /* main not ready yet — leave unchecked */ }
+}
+proxyToggle.addEventListener('change', async () => {
+  const want = proxyToggle.checked
+  proxyToggle.disabled = true
+  try {
+    const got = await window.api.setProxyEnabled(want)
+    proxyToggle.checked = !!got
+    showToast(got
+      ? 'Прокси включены — Claude теперь ходит через прокси активного акка'
+      : 'Прокси выключены — Claude ходит напрямую')
+    await render()
+  } finally {
+    proxyToggle.disabled = false
+  }
+})
+syncProxyToggle()
 
 document.getElementById('btn-add').addEventListener('click', () => openModal(null))
 document.getElementById('btn-refresh').addEventListener('click', async (e) => {

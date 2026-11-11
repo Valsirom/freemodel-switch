@@ -30,6 +30,20 @@ const PROVIDERS = {
     cookieDomain: 'aerolink.lat',
     tokenPrefix: 'aero_live_',
     api: 'aerolink'
+  },
+  // Free Model API: $5/day spend cap. Auth.js session cookie; usageProbePath is
+  // only used if sessionCookie is ever left empty.
+  coarena: {
+    id: 'coarena',
+    label: 'coarena',
+    proxyBaseUrl: 'https://coarena.ai/api',
+    dashOrigin: 'https://coarena.ai',
+    sessionCookie: '__Secure-authjs.session-token',
+    cookieDomain: 'coarena.ai',
+    tokenPrefix: 'coa_',
+    usageProbePath: '/api/me/model-api/usage?range=7d',
+    loginPath: '/',
+    api: 'coarena'
   }
 }
 
