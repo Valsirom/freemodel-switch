@@ -3,6 +3,7 @@ const { app, session, net } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const providers = require('./providers')
+const proxyCreds = require('./proxy-creds')
 
 // Per-account on-disk cache of aerolink request logs. /api/usage only returns
 // the last 50 logs and ignores all pagination params (limit/offset/cursor/page),
@@ -72,6 +73,10 @@ function fetchJson (partition, origin, pathname) {
       // never bubbles up as an uncaught exception.
       request.on('error', (err) => done({ ok: false, status: 0, data: null, error: err && err.message }))
       request.on('abort', () => done({ ok: false, status: 0, data: null, error: 'aborted' }))
+      request.on('login', (authInfo, cb) => {
+        const c = authInfo && authInfo.isProxy ? proxyCreds.get(partition) : null
+        if (c && c.username) cb(c.username, c.password); else cb()
+      })
       request.setHeader('Accept', 'application/json')
       let body = ''
       request.on('response', (response) => {
@@ -102,6 +107,10 @@ function fetchText (partition, origin, pathname) {
       request = net.request({ method: 'GET', url: origin + pathname, session: ses, useSessionCookies: true })
       request.on('error', () => done({ ok: false, status: 0, body: '' }))
       request.on('abort', () => done({ ok: false, status: 0, body: '' }))
+      request.on('login', (authInfo, cb) => {
+        const c = authInfo && authInfo.isProxy ? proxyCreds.get(partition) : null
+        if (c && c.username) cb(c.username, c.password); else cb()
+      })
       request.setHeader('Accept', 'text/html')
       let body = ''
       request.on('response', (response) => {

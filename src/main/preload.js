@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('api', {
   listProviders: () => ipcRenderer.invoke('providers:list'),
   getProxyEnabled: () => ipcRenderer.invoke('proxy:getEnabled'),
   setProxyEnabled: (enabled) => ipcRenderer.invoke('proxy:setEnabled', enabled),
+  checkProxy: (proxy, id) => ipcRenderer.invoke('proxy:check', { proxy, id }),
+  testProxy: (id) => ipcRenderer.invoke('accounts:testProxy', id),
   proxyStatus: () => ipcRenderer.invoke('proxy:status'),
   onChanged: (cb) => ipcRenderer.on('accounts:changed', () => cb())
 })

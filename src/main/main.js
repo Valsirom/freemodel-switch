@@ -12,6 +12,10 @@ const providers = require('./providers')
 const bridge = require('./bridge')
 const proxyConfig = require('./proxy-config')
 const relay = require('./proxy-relay')
+const proxyCreds = require('./proxy-creds')
+const { testProxy } = require('./proxy-test')
+const { parseProxy } = require('./proxy-parse')
+const proxyHistory = require('./proxy-history')
 
 let mainWindow = null
 
@@ -67,30 +71,25 @@ async function applyPartitionProxy (partition, proxy) {
   const ses = session.fromPartition(partition)
   const enabled = proxyConfig.getProxyEnabled()
   const wantUrl = (enabled && proxy && proxy.host && proxy.port)
-    ? 'http://' + proxy.host + ':' + proxy.port
+    ? (proxy.scheme === 'https' ? 'https' : 'http') + '://' + proxy.host + ':' + proxy.port
     : ''
-  const prev = _partitionProxyState.get(partition)
-  if (prev && prev.url === wantUrl && !!prev.hasAuth === !!(proxy && proxy.username)) {
-    return
+  // Creds are refreshed every time (cheap) so a changed password takes effect
+  // even when host:port stayed the same.
+  if (wantUrl) {
+    proxyCreds.set(partition, { username: proxy.username || '', password: proxy.password || '' })
+  } else {
+    proxyCreds.delete(partition)
   }
+  const prev = _partitionProxyState.get(partition)
+  if (prev && prev.url === wantUrl) return
 
   if (wantUrl) {
     await ses.setProxy({ proxyRules: wantUrl, proxyBypassRules: '<local>' })
-    // Chromium asks us for proxy creds via the global 'login' event below.
-    // Tag the partition with the creds so the handler can pick the right pair.
-    _partitionProxyCreds.set(partition, {
-      username: proxy.username || '',
-      password: proxy.password || ''
-    })
   } else {
     await ses.setProxy({ proxyRules: 'direct://' })
-    _partitionProxyCreds.delete(partition)
   }
   _partitionProxyState.set(partition, { url: wantUrl, hasAuth: !!(proxy && proxy.username) })
 }
-
-// Per-partition proxy credentials, consumed by the 'login' event handler below.
-const _partitionProxyCreds = new Map()
 
 // Apply proxy to a partition before any request goes through it. Pulls the
 // account record and its full proxy from the store.
@@ -176,7 +175,66 @@ ipcMain.handle('accounts:add', (_e, data) => {
   return id
 })
 
-ipcMain.handle('accounts:update', (_e, { id, data }) => store.update(id, data))
+ipcMain.handle('accounts:update', async (_e, { id, data }) => {
+  const ok = store.update(id, data)
+  if (ok && data && data.proxy !== undefined) {
+    await applyProxyForAccount(id).catch(() => {})
+    // If this is the account Claude currently uses, repoint the relay now.
+    const active = withActiveFlag(store.listPublic()).find(a => a.id === id && a.active)
+    if (active) relay.setUpstream(store.proxyOf(id))
+  }
+  return ok
+})
+
+// Check the account's proxy: fetch the exit IP/country through it, remember
+// them on the account, and report other accounts that share the same IP.
+ipcMain.handle('accounts:testProxy', async (_e, id) => {
+  const proxy = store.proxyOf(id)
+  if (!proxy) return { ok: false, error: 'У аккаунта нет прокси' }
+  const res = await testProxy(proxy)
+  if (res.ok) {
+    const acct = store.listPublic().find(a => a.id === id)
+    res.usedBy = findIpUsage(res.ip, id)   // look up BEFORE recording ourselves
+    store.setProxyInfo(id, { ip: res.ip, country: res.country })
+    proxyHistory.record(res.ip, id, acct ? acct.label : id)
+    res.sharedWith = res.usedBy.map(u => u.label)
+    notifyChanged()
+  }
+  return res
+})
+
+// Who else has had this exit IP: current accounts' stored IPs plus the
+// persistent history (covers deleted accounts / replaced proxies).
+function findIpUsage (ip, excludeId) {
+  const out = new Map()
+  const live = new Map(store.listPublic().map(a => [a.id, a]))
+  for (const a of live.values()) {
+    if (a.id !== excludeId && a.proxy && a.proxy.ip === ip) out.set(a.id, { label: a.label, deleted: false })
+  }
+  for (const e of proxyHistory.lookup(ip, excludeId)) {
+    if (out.has(e.id)) continue
+    const a = live.get(e.id)
+    out.set(e.id, { label: a ? a.label : e.label, deleted: !a, ts: e.ts })
+  }
+  return [...out.values()]
+}
+
+// Pre-save check from the add/edit form: test the proxy typed in the field (or
+// the account's stored one when the field is empty while editing) and report
+// the exit IP plus whether any other account has used it before.
+ipcMain.handle('proxy:check', async (_e, { proxy, id }) => {
+  let p
+  try {
+    if (proxy && proxy.trim()) p = parseProxy(proxy)
+    else if (id) p = store.proxyOf(id)
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+  if (!p) return { ok: false, error: 'Введи прокси' }
+  const res = await testProxy(p)
+  if (res.ok) res.usedBy = findIpUsage(res.ip, id || null)
+  return res
+})
 ipcMain.handle('accounts:remove', (_e, id) => { store.remove(id); return true })
 
 function accountsSwitch (id) {
@@ -361,16 +419,17 @@ async function importPendingCookies () {
 // from a session goes through an authenticated upstream proxy. We look up the
 // credentials we stashed in applyPartitionProxy for the right partition.
 //
-// Identifying which partition the auth request came from is awkward — Electron
-// gives us a webContents (sometimes) but for net.request there's no webContents
-// at all. Workaround: the residential creds are the same for every partition
-// in practice (same provider, same password); we just hand the first set we
-// have. If LO ever uses providers with different proxy passwords, we'll need a
-// proper per-session login handler.
+// net.request calls answer proxy auth themselves (request 'login' in usage.js).
+// This handler covers BrowserWindow sessions (login window): match the
+// webContents' session to the partition it was created for.
 app.on('login', (event, webContents, details, authInfo, callback) => {
   if (!authInfo || !authInfo.isProxy) return
   let creds = null
-  for (const c of _partitionProxyCreds.values()) { creds = c; break }
+  if (webContents) {
+    for (const [partition, c] of proxyCreds.entries()) {
+      if (session.fromPartition(partition) === webContents.session) { creds = c; break }
+    }
+  }
   if (!creds || !creds.username) return
   event.preventDefault()
   callback(creds.username, creds.password)

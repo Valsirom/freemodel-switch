@@ -1,6 +1,8 @@
 'use strict'
 const http = require('http')
+const https = require('https')
 const net = require('net')
+const tls = require('tls')
 
 // Local HTTP/HTTPS forward proxy that lives inside the switcher process.
 // Claude Desktop / Claude Code point HTTPS_PROXY at it (e.g. 127.0.0.1:47822)
@@ -38,6 +40,7 @@ function setUpstream (proxy) {
     return
   }
   currentUpstream = {
+    scheme: proxy.scheme === 'https' ? 'https' : 'http',
     host: String(proxy.host),
     port: Number(proxy.port),
     username: proxy.username || '',
@@ -53,6 +56,18 @@ function authHeader () {
   if (!currentUpstream || !currentUpstream.username) return ''
   const raw = currentUpstream.username + ':' + currentUpstream.password
   return 'Basic ' + Buffer.from(raw).toString('base64')
+}
+
+// Open a connection to the upstream proxy, over TLS when the proxy itself is
+// an https:// one. `onReady` fires once the socket is usable either way.
+function connectUpstream (onReady) {
+  const u = currentUpstream
+  if (u.scheme === 'https') {
+    const o = { host: u.host, port: u.port }
+    if (!net.isIP(u.host)) o.servername = u.host
+    return tls.connect(o, onReady)
+  }
+  return net.connect(u.port, u.host, onReady)
 }
 
 // Pipe two sockets to each other and clean up on any teardown. Errors are
@@ -83,7 +98,7 @@ function handleConnect (req, clientSocket, head) {
   const useUpstream = enabled && currentUpstream
 
   if (useUpstream) {
-    const upstream = net.connect(currentUpstream.port, currentUpstream.host, () => {
+    const upstream = connectUpstream(() => {
       const lines = [
         'CONNECT ' + host + ':' + port + ' HTTP/1.1',
         'Host: ' + host + ':' + port
@@ -173,7 +188,7 @@ function handleHttp (req, res) {
     delete opts.headers['proxy-authorization']
   }
 
-  const outbound = http.request(opts, (upRes) => {
+  const outbound = (useUpstream && currentUpstream.scheme === 'https' ? https : http).request(opts, (upRes) => {
     res.writeHead(upRes.statusCode || 502, upRes.headers)
     upRes.pipe(res)
   })

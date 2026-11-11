@@ -11,6 +11,44 @@ const fProvider = document.getElementById('f-provider')
 const fLabel = document.getElementById('f-label')
 const fToken = document.getElementById('f-token')
 const fBaseUrl = document.getElementById('f-baseurl')
+const fProxy = document.getElementById('f-proxy')
+const proxyHint = document.getElementById('proxy-hint')
+const proxyCheckBtn = document.getElementById('f-proxy-check')
+
+// Render a proxy check result into the hint line under the field.
+function showProxyResult (res) {
+  proxyHint.classList.remove('ok', 'bad')
+  if (!res || !res.ok) {
+    proxyHint.textContent = 'Не удалось: ' + ((res && res.error) || 'неизвестная ошибка')
+    proxyHint.classList.add('bad')
+    return
+  }
+  const head = 'Соединение ок. IP ' + res.ip + ' (' + (res.country || '??') + ')'
+  if (res.usedBy && res.usedBy.length) {
+    const who = res.usedBy.map(u => u.label + (u.deleted ? ' (удалён)' : '')).join(', ')
+    proxyHint.textContent = head + ' — уже использовался: ' + who
+    proxyHint.classList.add('bad')
+  } else {
+    proxyHint.textContent = head + ' — раньше не использовался'
+    proxyHint.classList.add('ok')
+  }
+}
+
+proxyCheckBtn.addEventListener('click', async () => {
+  proxyCheckBtn.disabled = true
+  const label = proxyCheckBtn.textContent
+  proxyCheckBtn.textContent = 'Проверяю…'
+  proxyHint.classList.remove('ok', 'bad')
+  proxyHint.textContent = ''
+  try {
+    const raw = fProxy.value.trim()
+    // '-' means "remove" in the field; nothing to test then.
+    showProxyResult(await window.api.checkProxy(raw === '-' ? '' : raw, editingId))
+  } finally {
+    proxyCheckBtn.textContent = label
+    proxyCheckBtn.disabled = false
+  }
+})
 const modalTitle = document.getElementById('modal-title')
 const tabsEl = document.getElementById('tabs')
 
@@ -117,6 +155,13 @@ function openModal (account) {
   fProvider.value = (account && account.provider) || 'freemodel'
   fLabel.value = account ? account.label : ''
   fToken.value = ''
+  fProxy.value = ''
+  if (account && account.proxy && account.proxy.host) {
+    fProxy.placeholder = '(сейчас ' + account.proxy.scheme + '://' + account.proxy.host + ':' + account.proxy.port + ' — пусто: не менять, «-»: убрать)'
+  } else {
+    fProxy.placeholder = 'user:pass@host:port или host:port:user:pass'
+  }
+  proxyHint.textContent = ''
   // Editing keeps the stored base URL; adding auto-fills from the provider.
   if (account) {
     fBaseUrl.value = account.baseUrl
@@ -187,14 +232,39 @@ async function saveModal () {
   const token = fToken.value.trim()
   const fallbackBase = (providersById[provider] && providersById[provider].proxyBaseUrl) || 'https://cc.freemodel.dev'
   const baseUrl = fBaseUrl.value.trim() || fallbackBase
-  if (editingId) {
-    await window.api.updateAccount(editingId, { label, baseUrl, provider, token: token || undefined })
-  } else {
-    if (!token) { fToken.focus(); return }
-    await window.api.addAccount({ label, token, baseUrl, provider })
-    activeTab = provider // jump to the new account's tab so it's visible
+  // '' field = leave proxy alone when editing / none when adding; '-' removes it.
+  const proxyRaw = fProxy.value.trim()
+  const proxy = proxyRaw === '' ? undefined : (proxyRaw === '-' ? '' : proxyRaw)
+  let id = editingId
+  try {
+    if (editingId) {
+      await window.api.updateAccount(editingId, { label, baseUrl, provider, token: token || undefined, proxy })
+    } else {
+      if (!token) { fToken.focus(); return }
+      id = await window.api.addAccount({ label, token, baseUrl, provider, proxy })
+      activeTab = provider // jump to the new account's tab so it's visible
+    }
+  } catch (err) {
+    // Strip Electron's "Error invoking remote method ..." prefix.
+    proxyHint.textContent = String(err && err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+    return
   }
   closeModal()
+  await render()
+  if (proxy) await checkProxy(id)
+}
+
+// Probe the account's proxy for its exit IP/country, then tell the user.
+async function checkProxy (id) {
+  showToast('Проверяю прокси…', 15000)
+  const res = await window.api.testProxy(id)
+  if (!res || !res.ok) {
+    showToast('Прокси не отвечает: ' + ((res && res.error) || 'неизвестная ошибка'), 6000)
+  } else if (res.usedBy && res.usedBy.length) {
+    showToast('IP ' + res.ip + ' (' + (res.country || '??') + ') уже использовался: ' + res.usedBy.map(u => u.label + (u.deleted ? ' (удалён)' : '')).join(', '), 7000)
+  } else {
+    showToast('Прокси ок: ' + res.ip + ' (' + (res.country || '??') + ')', 4000)
+  }
   await render()
 }
 

@@ -47,6 +47,14 @@
       <label>Base URL
         <input id="f-baseurl" type="text" value="https://cc.freemodel.dev" spellcheck="false" />
       </label>
+      <label>Прокси (необязательно)
+        <span class="input-row">
+          <input id="f-proxy" type="text" placeholder="user:pass@host:port или host:port:user:pass" spellcheck="false" autocomplete="off" />
+          <button id="f-proxy-check" type="button" class="btn ghost small">Проверить</button>
+        </span>
+      </label>
+      <p class="muted small-hint">Для HTTPS-прокси (как «Тип прокси: HTTPS» в AdsPower) начни строку с <code>https://</code>, например <code>https://user:pass@host:port</code>. Без префикса прокси считается обычным HTTP.</p>
+      <p id="proxy-hint" class="muted"></p>
       <p id="modal-hint" class="muted">Прогрессбары и дата подписки появятся после входа в дашборд (кнопка «Войти» на карточке).</p>
       <div class="modal-actions">
         <button id="modal-cancel" class="btn ghost">Отмена</button>

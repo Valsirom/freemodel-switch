@@ -183,9 +183,13 @@ function cardHtml (a) {
   const activeBadge = a.active ? '<span class="badge active">активен</span>' : ''
   // Residential proxy badge — only meaningful when the account actually has a
   // proxy attached (autoreger exports one per aerolink account).
-  const proxyBadge = (a.proxy && (a.proxy.country || a.proxy.ip))
-    ? `<span class="badge proxy" title="Трафик этого акка идёт через ${esc(a.proxy.ip || '')}">via ${esc(a.proxy.country || '??')} ${esc(a.proxy.ip || '')}</span>`
-    : ''
+  let proxyBadge = ''
+  if (a.proxy && (a.proxy.country || a.proxy.ip)) {
+    proxyBadge = `<span class="badge proxy" title="Трафик этого акка идёт через ${esc(a.proxy.ip || '')}">via ${esc(a.proxy.country || '??')} ${esc(a.proxy.ip || '')}</span>`
+  } else if (a.proxy && a.proxy.host) {
+    // Saved but not yet verified (exit IP unknown).
+    proxyBadge = `<span class="badge proxy" title="Прокси не проверен">proxy ${esc(a.proxy.host)}:${esc(a.proxy.port)}</span>`
+  }
 
   return `
   <div class="card ${a.active ? 'active' : ''}" data-id="${a.id}">

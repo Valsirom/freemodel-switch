@@ -103,7 +103,13 @@ function getActiveDesktopToken () {
   const meta = readJson(metaPath())
   if (!meta || !meta.appliedId) return null
   const profile = readJson(path.join(cfgLibDir(), meta.appliedId + '.json'))
-  return (profile && profile.inferenceGatewayApiKey) || null
+  const key = (profile && profile.inferenceGatewayApiKey) || null
+  // After the first launch Claude Desktop re-saves the key encrypted as
+  // "__sealed…" (an opaque blob). It can never equal an account token, and
+  // returning it made withActiveFlag skip its settings.json fallback, so no
+  // account was ever marked active. Treat a sealed key as "unknown".
+  if (key && String(key).startsWith('__sealed')) return null
+  return key
 }
 
 module.exports = { applyDesktop, getActiveDesktopToken }

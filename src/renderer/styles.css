@@ -267,3 +267,9 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
   line-height: 17px;
 }
 .tab.active .count { background: rgba(255, 255, 255, 0.25); }
+
+/* ---- proxy field + check button ---- */
+.input-row { display: flex; gap: 8px; align-items: center; }
+.input-row input { flex: 1; min-width: 0; }
+#proxy-hint.ok { color: var(--green, #4ade80); }
+#proxy-hint.bad { color: var(--amber, #fbbf24); }

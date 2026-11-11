@@ -4,6 +4,7 @@ const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { app, safeStorage } = require('electron')
+const { parseProxy } = require('./proxy-parse')
 
 // Accounts live in the app's userData dir, separate from Claude Code's config.
 function storePath () {
@@ -96,7 +97,14 @@ function persist (accounts) {
 // password stay server-side; only main.js needs them via proxyOf().
 function toPublic (a) {
   const summary = a.proxy
-    ? { country: a.proxy.country || null, ip: a.proxy.ip || null }
+    ? {
+        country: a.proxy.country || null,
+        ip: a.proxy.ip || null,
+        host: a.proxy.host || null,
+        port: a.proxy.port || null,
+        scheme: a.proxy.scheme || 'http',
+        hasAuth: !!a.proxy.username
+      }
     : null
   return {
     id: a.id,
@@ -135,8 +143,11 @@ function proxyOf (id) {
   return {
     host: p.host,
     port: Number(p.port) || 0,
+    scheme: p.scheme === 'https' ? 'https' : 'http',
     username: p.username || '',
-    password: p.password || '',
+    // passwordEnc is ours (safeStorage); plain `password` comes from external
+    // tools that write accounts.json directly.
+    password: p.passwordEnc ? decrypt(p.passwordEnc) : (p.password || ''),
     country: p.country || null,
     ip: p.ip || null
   }
@@ -148,7 +159,34 @@ function tokenHint (token) {
   return token.slice(0, 8) + '…' + token.slice(-4)
 }
 
-function add ({ label, token, baseUrl, provider }) {
+// Apply a user-supplied proxy string to an account record. undefined = leave
+// as is, '' = remove, otherwise parse (throws on bad input) and store with the
+// password encrypted. Exit IP/country are reset; the tester fills them in.
+function applyProxyInput (a, input) {
+  if (input === undefined || input === null) return
+  if (String(input).trim() === '') { delete a.proxy; return }
+  const p = parseProxy(input)
+  a.proxy = {
+    scheme: p.scheme,
+    host: p.host,
+    port: p.port,
+    username: p.username,
+    passwordEnc: p.password ? encrypt(p.password) : null,
+    country: null,
+    ip: null
+  }
+}
+
+function setProxyInfo (id, { ip, country }) {
+  const accounts = load()
+  const a = accounts.find(x => x.id === id)
+  if (!a || !a.proxy) return
+  a.proxy.ip = ip || null
+  a.proxy.country = country || null
+  persist(accounts)
+}
+
+function add ({ label, token, baseUrl, provider, proxy }) {
   const accounts = load()
   const id = crypto.randomBytes(6).toString('hex')
   accounts.push({
@@ -160,11 +198,12 @@ function add ({ label, token, baseUrl, provider }) {
     baseUrl: baseUrl || 'https://cc.freemodel.dev',
     partition: 'persist:acct-' + id
   })
+  applyProxyInput(accounts[accounts.length - 1], proxy)
   persist(accounts)
   return id
 }
 
-function update (id, { label, token, baseUrl, provider }) {
+function update (id, { label, token, baseUrl, provider, proxy }) {
   const accounts = load()
   const a = accounts.find(x => x.id === id)
   if (!a) return false
@@ -172,6 +211,7 @@ function update (id, { label, token, baseUrl, provider }) {
   if (typeof baseUrl === 'string') a.baseUrl = baseUrl
   if (typeof provider === 'string') a.provider = provider
   if (token) { a.token = encrypt(token); a.tokenHint = tokenHint(token) }
+  applyProxyInput(a, proxy)
   persist(accounts)
   return true
 }
@@ -196,5 +236,5 @@ function setData (id, { usage, billing, account, fetchError, windowsStale }) {
 }
 
 module.exports = {
-  listPublic, tokenOf, proxyOf, add, update, remove, setData, load, toPublic, storePath
+  listPublic, tokenOf, proxyOf, setProxyInfo, add, update, remove, setData, load, toPublic, storePath
 }
