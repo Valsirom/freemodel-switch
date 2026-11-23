@@ -115,6 +115,7 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
 }
 .badge.active { background: rgba(79,140,255,.15); border-color: var(--accent-2); color: var(--accent); }
 .badge.plan { background: var(--panel-2); }
+.badge.proxy.bad { background: rgba(255, 90, 90, .15); border-color: rgba(255, 90, 90, .45); color: var(--red, #ff6b6b); }
 .badge.proxy { background: rgba(120, 200, 120, .12); border-color: rgba(120, 200, 120, .35); color: var(--green, #6cc66c); font-family: monospace; }
 
 .proxy-toggle {

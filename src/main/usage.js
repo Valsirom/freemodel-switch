@@ -126,6 +126,9 @@ function fetchText (partition, origin, pathname) {
 }
 
 const loggedOut = { loggedIn: false, account: null, usage: null, billing: null }
+// status 0 = request never got an HTTP answer (dead proxy, DNS, timeout): that
+// is a network problem, not a logged-out session.
+const netFail = (r) => ({ ...loggedOut, networkError: (r && r.error) || 'нет связи' })
 
 // Dispatch to the right dashboard shape for the account's provider. Returns a
 // unified { loggedIn, account, usage, billing } regardless of provider so the
@@ -142,6 +145,7 @@ async function fetchAll (partition, providerId) {
 async function fetchFreemodel (partition, p) {
   const me = await fetchJson(partition, p.dashOrigin, '/api/auth/me')
   const user = me.data && me.data.user
+  if (me.status === 0) return netFail(me)
   if (me.status === 401 || !user || !user.email) return loggedOut
   const [usage, billing] = await Promise.all([
     fetchJson(partition, p.dashOrigin, '/api/usage'),
@@ -241,6 +245,7 @@ function aerolinkPlanLimits (planName) {
 async function fetchAerolink (partition, p) {
   const sess = await fetchJson(partition, p.dashOrigin, '/api/auth/get-session')
   const user = sess.data && sess.data.user
+  if (sess.status === 0) return netFail(sess)
   if (sess.status === 401 || !user || !user.email) {
     // Diagnostics: dump what aerolink actually returned so we can tell apart
     // "401 — cookie didn't reach server" from "200 empty session" from
@@ -322,6 +327,7 @@ async function fetchAerolink (partition, p) {
 async function fetchCoarena (partition, p) {
   const r = await fetchJson(partition, p.dashOrigin, '/api/me/model-api/usage?range=7d')
   const d = r.data
+  if (r.status === 0) return netFail(r)
   if (r.status === 401 || r.status === 403 || !r.ok || !d || !d.today) return loggedOut
   const t = d.today
   const limitUsd = Number(d.limits && d.limits.usd_per_day) || Number(d.default_usd_per_day) || 0

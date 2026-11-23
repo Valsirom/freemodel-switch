@@ -103,7 +103,8 @@ function toPublic (a) {
         host: a.proxy.host || null,
         port: a.proxy.port || null,
         scheme: a.proxy.scheme || 'http',
-        hasAuth: !!a.proxy.username
+        hasAuth: !!a.proxy.username,
+        health: a.proxy.health || null
       }
     : null
   return {
@@ -186,6 +187,22 @@ function setProxyInfo (id, { ip, country }) {
   persist(accounts)
 }
 
+// Result of the latest background/manual proxy probe: { ok, error, ts, okTs }.
+// okTs keeps the last time it worked across failures.
+function setProxyHealth (id, { ok, error }) {
+  const accounts = load()
+  const a = accounts.find(x => x.id === id)
+  if (!a || !a.proxy) return
+  const prev = a.proxy.health || {}
+  a.proxy.health = {
+    ok: !!ok,
+    error: ok ? null : (error || 'нет ответа'),
+    ts: Date.now(),
+    okTs: ok ? Date.now() : (prev.okTs || null)
+  }
+  persist(accounts)
+}
+
 function add ({ label, token, baseUrl, provider, proxy }) {
   const accounts = load()
   const id = crypto.randomBytes(6).toString('hex')
@@ -236,5 +253,5 @@ function setData (id, { usage, billing, account, fetchError, windowsStale }) {
 }
 
 module.exports = {
-  listPublic, tokenOf, proxyOf, setProxyInfo, add, update, remove, setData, load, toPublic, storePath
+  listPublic, tokenOf, proxyOf, setProxyInfo, setProxyHealth, add, update, remove, setData, load, toPublic, storePath
 }

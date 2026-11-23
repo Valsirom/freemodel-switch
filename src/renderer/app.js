@@ -281,6 +281,14 @@ cardsEl.addEventListener('click', async (e) => {
   const acct = accounts.find(a => a.id === id)
 
   if (act === 'switch') {
+    if (acct && acct.proxy) {
+      btn.textContent = '…'; btn.disabled = true
+      const res = await window.api.testProxy(id)
+      if (!res || !res.ok) {
+        const go = confirm('Прокси аккаунта «' + acct.label + '» не отвечает: ' + ((res && res.error) || 'неизвестная ошибка') + '.\n\nВсё равно переключиться?')
+        if (!go) { await render(); return }
+      }
+    }
     btn.textContent = '⏳'; btn.disabled = true
     showToast('Переключаю на «' + (acct ? acct.label : '') + '» и перезапускаю Claude…')
     await window.api.switchAndRestart(id)

@@ -152,7 +152,10 @@ async function refreshOne (id) {
   try {
     await applyProxyForAccount(id)
     const res = await fetchAll(acct.partition, acct.provider)
-    if (!res.loggedIn) {
+    if (res.networkError) {
+      // Keep cached usage; just flag the card.
+      store.setData(id, { fetchError: 'network: ' + res.networkError })
+    } else if (!res.loggedIn) {
       store.setData(id, { fetchError: 'not-logged-in' })
     } else {
       store.setData(id, { usage: res.usage, billing: res.billing, account: res.account, windowsStale: !!res.windowsStale })
@@ -192,6 +195,8 @@ ipcMain.handle('accounts:testProxy', async (_e, id) => {
   const proxy = store.proxyOf(id)
   if (!proxy) return { ok: false, error: 'У аккаунта нет прокси' }
   const res = await testProxy(proxy)
+  store.setProxyHealth(id, res)
+  if (!res.ok) notifyChanged()
   if (res.ok) {
     const acct = store.listPublic().find(a => a.id === id)
     res.usedBy = findIpUsage(res.ip, id)   // look up BEFORE recording ourselves
@@ -338,10 +343,32 @@ ipcMain.handle('proxy:status', () => relay.status())
 // has no pagination, so to keep the rolling 5h cache complete we poll at least
 // once a minute. Stale UI is fine; the renderer reads from the same store.
 let _autoRefreshTimer = null
+let _tick = 0
+
+// Probe every account's proxy and store the verdict so cards can show a dead
+// proxy instead of a misleading "log in" notice.
+async function checkAllProxies () {
+  const withProxy = store.listPublic().filter(a => a.proxy)
+  await Promise.all(withProxy.map(async (a) => {
+    const p = store.proxyOf(a.id)
+    if (!p) return
+    const res = await testProxy(p)
+    store.setProxyHealth(a.id, res)
+    if (res.ok && res.ip && res.ip !== (a.proxy && a.proxy.ip)) {
+      store.setProxyInfo(a.id, { ip: res.ip, country: res.country })
+      proxyHistory.record(res.ip, a.id, a.label)
+    }
+  }))
+  notifyChanged()
+}
+
 function startAutoRefresh () {
   if (_autoRefreshTimer) return
+  checkAllProxies().catch(() => {})
   _autoRefreshTimer = setInterval(() => {
     refreshAll().then(() => notifyChanged()).catch(() => { /* ignore */ })
+    // Proxy health every 5 minutes.
+    if (++_tick % 5 === 0) checkAllProxies().catch(() => {})
   }, 60 * 1000)
 }
 

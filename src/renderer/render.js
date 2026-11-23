@@ -165,7 +165,8 @@ function coarenaBody (a) {
 }
 
 function cardHtml (a) {
-  const loggedOut = a.fetchError === 'not-logged-in' || (!a.account && !a.usage && !a.billing)
+  const netErr = a.fetchError && String(a.fetchError).startsWith('network: ') ? String(a.fetchError).slice(9) : null
+  const loggedOut = !netErr && (a.fetchError === 'not-logged-in' || (!a.account && !a.usage && !a.billing))
   const planName = a.billing ? (a.billing.planName || planLabel(a.billing.planId)) : null
 
   let body
@@ -179,6 +180,9 @@ function cardHtml (a) {
     body = freemodelBody(a)
   }
 
+  const netNote = netErr
+    ? `<p class="notice warn-note">Нет связи с дашбордом${a.proxy ? ' (проверь прокси)' : ''}: ${esc(netErr)}. Показаны последние данные.</p>`
+    : ''
   const planBadge = planName ? `<span class="badge plan">${esc(planName)}</span>` : ''
   const activeBadge = a.active ? '<span class="badge active">активен</span>' : ''
   // Residential proxy badge — only meaningful when the account actually has a
@@ -186,6 +190,13 @@ function cardHtml (a) {
   let proxyBadge = ''
   if (a.proxy && (a.proxy.country || a.proxy.ip)) {
     proxyBadge = `<span class="badge proxy" title="Трафик этого акка идёт через ${esc(a.proxy.ip || '')}">via ${esc(a.proxy.country || '??')} ${esc(a.proxy.ip || '')}</span>`
+  }
+  const h = a.proxy && a.proxy.health
+  if (h && !h.ok) {
+    const since = h.okTs ? ', последний раз работал ' + new Date(h.okTs).toLocaleString('ru-RU') : ''
+    proxyBadge = `<span class="badge proxy bad" title="${esc(h.error || '')}${esc(since)}">прокси не отвечает</span>`
+  } else if (proxyBadge) {
+    // keep verified badge
   } else if (a.proxy && a.proxy.host) {
     // Saved but not yet verified (exit IP unknown).
     proxyBadge = `<span class="badge proxy" title="Прокси не проверен">proxy ${esc(a.proxy.host)}:${esc(a.proxy.port)}</span>`
@@ -200,7 +211,7 @@ function cardHtml (a) {
       </div>
       <div>${proxyBadge}${planBadge}${activeBadge}</div>
     </div>
-    ${body}
+    ${netNote}${body}
     <div class="card-foot">
       <button class="btn ${a.active ? 'primary' : 'ghost'} small" data-act="switch" ${a.active ? 'disabled' : ''} title="${a.active ? 'Активный аккаунт' : 'Переключить и перезапустить Claude Code'}">
         ${a.active ? '●' : '▶'}
